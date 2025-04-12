@@ -2,6 +2,17 @@ const fs = require('fs').promises;
 const path = require('path');
 const axios = require('axios');
 
+// Parse command line arguments
+const args = process.argv.slice(2);
+let configPath = null;
+
+for (let i = 0; i < args.length; i++) {
+  if (args[i] === '--config' && i + 1 < args.length) {
+    configPath = args[i + 1];
+    break;
+  }
+}
+
 // Configuration
 const API_URL = 'http://localhost:1337/api/projects/group-by-year';
 const COLLAGES_SOURCE = path.join(__dirname, '..', 'jackie_collage_integration', 'data', 'collages_flattened');
@@ -167,6 +178,18 @@ async function copyGalleryImages() {
 async function main() {
   try {
     console.log('Starting migration process...');
+    
+    // Load configuration if provided
+    let config = null;
+    if (configPath) {
+      try {
+        const configData = await fs.readFile(configPath, 'utf8');
+        config = JSON.parse(configData);
+        console.log('Loaded configuration:', config);
+      } catch (error) {
+        console.error('Error loading configuration:', error.message);
+      }
+    }
     
     // Ensure output directory exists
     await ensureDirectoryExists(OUTPUT_DIR);
