@@ -1,81 +1,118 @@
-# Jackie Sumell Migration Tool
+# Jackie Utils
 
-A drag and drop web application for organizing Jackie Sumell project files.
+This directory contains utility scripts for managing Jackie Sumell's project data and directories.
 
-## Features
+## Directory Creation Script
 
-- Drag and drop interface for selecting directories
-- Real-time console output
-- Detailed logs for project directories, collage images, and gallery images
-- Simple and intuitive user interface
+The `create_directories.js` script helps manage project directories by creating a standardized folder structure for each project.
 
-## Prerequisites
+### Features
 
-- Node.js (v14 or higher)
-- npm (v6 or higher)
-- Local backend running on port 1337 (for API access)
+- Fetches project list from the `/api/projects/project-list` endpoint
+- Validates that each project name starts with a 4-digit year
+- Creates directories in the format "YYYY Project Name"
+- Creates subdirectories for collages and galleries
+- Generates detailed operation logs
 
-## Installation
-
-1. Clone the repository
-2. Navigate to the `jackie_utils` directory
-3. Install dependencies:
+### Usage
 
 ```bash
-npm install
+node create_directories.js
 ```
 
-## Usage
+### Directory Structure
 
-1. Start the server:
+For each project, the script creates:
+```
+YYYY Project Name/
+├── YYYY Project Name_collage/
+└── YYYY Project Name_gallery/
+```
+
+### Log Files
+
+The script generates a log file with the format `directory_creation_log_YYYY-MM-DDTHH-mm-ss-mmmZ.txt` containing:
+- List of newly created directories
+- List of existing directories
+- Any errors encountered during the process
+
+### Configuration
+
+The script uses the following configuration:
+- API URL: `http://localhost:1337/api/projects/project-list`
+- Output Directory: `../jackie_utils/project-folders`
+
+## Strapi Folder Setup Script
+
+The `setup_strapi_folders.js` script creates and links folders in the Strapi media library to their respective projects.
+
+### Features
+
+- Creates project folders in Strapi's media library
+- Creates collage and gallery subfolders for each project
+- Links folders to their respective projects in the database
+- Generates detailed operation logs
+
+### Usage
 
 ```bash
-npm start
+node setup_strapi_folders.js
 ```
 
-2. Open your browser and navigate to `http://localhost:3000`
+### Process
 
-3. Drag and drop directories or use the "Browse Files" button to select directories
+1. Fetches project list from the API
+2. For each project:
+   - Creates a main folder in Strapi
+   - Creates collage and gallery subfolders
+   - Links the folders to the project in the database
+3. Generates a log file of the operation
 
-4. Click "Run Migration" to start the migration process
+### Log Files
 
-5. View the console output and logs in real-time
+The script generates a log file with the format `strapi_folder_setup_log_YYYY-MM-DDTHH-mm-ss-mmmZ.txt` containing:
+- List of successfully created and linked folders
+- Any errors encountered during the process
 
-## How It Works
+### Configuration
 
-1. The application fetches project data from the local API
-2. It creates a directory structure for each project in the format `YYYY Projectname`
-3. It creates subdirectories for each project with `_collage` and `_gallery` suffixes
-4. It copies collage images from the source directory to the appropriate project directories
-5. It copies gallery images from the source directory to the appropriate project directories
-6. It generates detailed log files for each step of the process
+The script uses the following configuration:
+- API URL: `http://localhost:1337/api/projects/project-list`
+- Strapi URL: `http://localhost:1337`
 
-## Directory Structure
+## Migration Script
 
-The migration tool creates the following directory structure:
+The `migration.js` script handles data migration tasks.
 
-```
-project-folders/
-├── YYYY Projectname/
-│   ├── YYYY Projectname_collage/
-│   │   └── collage_image.jpg
-│   └── YYYY Projectname_gallery/
-│       ├── gallery_image1.jpg
-│       ├── gallery_image2.jpg
-│       └── ...
-└── ...
+### Usage
+
+```bash
+node migration.js --config <config-file-path>
 ```
 
-## Log Files
+### Configuration
 
-The migration tool generates the following log files:
+Create a JSON configuration file with the following structure:
+```json
+{
+  "source": {
+    "type": "csv",
+    "path": "path/to/source.csv"
+  },
+  "destination": {
+    "type": "strapi",
+    "url": "http://localhost:1337",
+    "token": "your-api-token"
+  },
+  "mappings": {
+    "field1": "destinationField1",
+    "field2": "destinationField2"
+  }
+}
+```
 
-- `db_projects_list[timestamp].txt`: Lists all created/updated directories
-- `collage_output[timestamp].txt`: Logs collage image copying results
-- `gallery_output[timestamp].txt`: Logs gallery image copying results
+## Requirements
 
-## Troubleshooting
-
-- If the migration fails, check the console output for error messages
-- Ensure that the local backend is running on port 1337
-- Check that the source directories (`collages_flattened` and `project_folders`) exist and contain the expected files 
+- Node.js
+- npm or yarn
+- Access to the Strapi backend API 

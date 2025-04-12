@@ -2,7 +2,7 @@ const fs = require('fs').promises;
 const path = require('path');
 const axios = require('axios');
 
-const API_URL = 'http://localhost:1337/api/projects';
+const API_URL = 'http://localhost:1337/api/projects/project-list';
 
 // Configuration - can be modified as needed
 const OUTPUT_DIR = path.join(__dirname, '..', 'jackie_utils', 'project-folders');
@@ -21,17 +21,17 @@ async function getProjectsFromAPI() {
     // Log the response structure to debug
     console.log('API Response:', JSON.stringify(response.data, null, 2));
     
-    // Handle API response structure
-    if (response.data.data && Array.isArray(response.data.data)) {
-      // Map the data to extract year and name
-      return response.data.data.map(project => ({
-        attributes: {
-          year: project.Date,
-          name: project.Name
+    // Handle API response structure - expecting array of "YYYY Project Name" strings
+    if (response.data && Array.isArray(response.data)) {
+      return response.data.map(projectString => {
+        // Validate that the string starts with a 4-digit year
+        if (!/^\d{4}\s/.test(projectString)) {
+          throw new Error(`Invalid project format - must start with year: ${projectString}`);
         }
-      }));
+        return projectString;
+      });
     } else {
-      throw new Error('Unexpected API response structure - expected array of projects');
+      throw new Error('Unexpected API response structure - expected array of project strings');
     }
   } catch (error) {
     if (error.response) {
@@ -66,18 +66,10 @@ async function createProjectDirectories() {
       errors: []
     };
 
-    for (const project of projects) {
-      // Extract attributes from Strapi's response structure
-      const { year, name } = project.attributes || project;
-      if (!year || !name) {
-        console.error('Invalid project data:', project);
-        continue;
-      }
-
-      const dirName = `${year} ${name}`;
-      const projectPath = path.join(OUTPUT_DIR, dirName);
-      const collagePath = path.join(projectPath, `${dirName}_collage`);
-      const galleryPath = path.join(projectPath, `${dirName}_gallery`);
+    for (const projectName of projects) {
+      const projectPath = path.join(OUTPUT_DIR, projectName);
+      const collagePath = path.join(projectPath, `${projectName}_collage`);
+      const galleryPath = path.join(projectPath, `${projectName}_gallery`);
 
       try {
         // Check if directory already exists
@@ -88,15 +80,15 @@ async function createProjectDirectories() {
           await ensureDirectoryExists(projectPath);
           await ensureDirectoryExists(collagePath);
           await ensureDirectoryExists(galleryPath);
-          results.created.push(dirName);
-          console.log(`Created: ${dirName}`);
+          results.created.push(projectName);
+          console.log(`Created: ${projectName}`);
         } else {
-          results.existing.push(dirName);
-          console.log(`Already exists: ${dirName}`);
+          results.existing.push(projectName);
+          console.log(`Already exists: ${projectName}`);
         }
       } catch (error) {
-        results.errors.push({ name: dirName, error: error.message });
-        console.error(`Error creating ${dirName}:`, error.message);
+        results.errors.push({ name: projectName, error: error.message });
+        console.error(`Error creating ${projectName}:`, error.message);
       }
     }
 
