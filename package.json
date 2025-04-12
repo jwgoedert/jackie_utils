@@ -3,9 +3,12 @@
   "version": "1.0.0",
   "description": "Utility scripts for Jackie Sumell project files",
   "scripts": {
-    "create-dirs": "node create_directories.js"
+    "create-dirs": "node create_directories.js",
+    "setup-strapi-folders": "node setup_strapi_folders.js"
   },
   "dependencies": {
-    "axios": "^1.6.7"
+    "axios": "^1.6.7",
+    "sqlite3": "^5.1.7",
+    "sqlite": "^5.1.1"
   }
 } 
