@@ -1,0 +1,12 @@
+{
+  "name": "jackie-utils",
+  "version": "1.0.0",
+  "description": "Utility scripts for Jackie Sumell project files",
+  "main": "migration.js",
+  "scripts": {
+    "migrate": "node migration.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.7"
+  }
+} 
