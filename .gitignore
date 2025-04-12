@@ -1,0 +1,89 @@
+# Dependencies
+node_modules/
+.npm/
+.yarn/
+package-lock.json
+yarn.lock
+
+# Environment and config files
+.env
+.env.*
+.env.local
+.env.development
+.env.test
+.env.production
+config/secrets.js
+**/config/secrets.json
+**/config/*.secret.*
+config/*.json
+*.secret
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# IDE files
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# Build and output directories
+dist/
+build/
+out/
+.next/
+coverage/
+.nyc_output/
+tmp/
+temp/
+.cache/
+
+# Backup files
+*.bak
+*.backup
+*~
+*.swp
+*.tmp
+*.temp
+
+# Database files
+*.sqlite
+*.sqlite3
+*.db
+
+# Certificates and keys
+*.pem
+*.key
+*.crt
+*.cer
+*.p12
+*.pfx
+
+# Project specific
+directory_creation_log_*.txt
