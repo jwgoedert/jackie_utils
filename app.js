@@ -68,21 +68,8 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function handleBrowse() {
-    // Create a temporary input element
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.webkitdirectory = true;
-    input.directory = true;
-    
-    input.addEventListener('change', (e) => {
-      const files = e.target.files;
-      if (files.length > 0) {
-        const path = files[0].webkitRelativePath.split('/')[0];
-        destinationInput.value = path;
-      }
-    });
-    
-    input.click();
+    // Simply focus the input field
+    destinationInput.focus();
   }
 
   function addDirectory(path) {
@@ -122,6 +109,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     const destinationPath = destinationInput.value.trim();
+    if (!destinationPath) {
+      alert('Please select a destination directory');
+      return;
+    }
     
     try {
       const response = await fetch('/api/run-migration', {
@@ -131,7 +122,7 @@ document.addEventListener('DOMContentLoaded', () => {
         },
         body: JSON.stringify({
           directories: Array.from(selectedDirectories),
-          destinationPath: destinationPath || undefined
+          destinationPath: destinationPath
         }),
       });
 

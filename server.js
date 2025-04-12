@@ -2,6 +2,7 @@ const express = require('express');
 const path = require('path');
 const { exec } = require('child_process');
 const fs = require('fs').promises;
+const os = require('os');
 const app = express();
 const port = 3000;
 
@@ -12,6 +13,43 @@ app.use(express.static(path.join(__dirname)));
 // Routes
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
+});
+
+// API endpoint to get directory contents
+app.get('/api/browse', async (req, res) => {
+  try {
+    // Start from home directory if no path provided
+    let startPath = req.query.path || os.homedir();
+    
+    // Ensure the path exists and is a directory
+    const stats = await fs.stat(startPath);
+    if (!stats.isDirectory()) {
+      throw new Error('Not a directory');
+    }
+
+    // Get directory contents
+    const contents = await fs.readdir(startPath, { withFileTypes: true });
+    
+    // Get parent directory
+    const parentDir = path.dirname(startPath);
+    
+    // Prepare response data
+    const data = {
+      currentPath: startPath,
+      parentPath: parentDir !== startPath ? parentDir : null,
+      directories: contents
+        .filter(dirent => dirent.isDirectory())
+        .map(dirent => ({
+          name: dirent.name,
+          path: path.join(startPath, dirent.name)
+        }))
+    };
+    
+    res.json(data);
+  } catch (error) {
+    console.error('Browse error:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // API endpoint to run the migration

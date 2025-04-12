@@ -287,4 +287,71 @@ button {
   .log-files {
     grid-template-columns: repeat(3, 1fr);
   }
+}
+
+/* Directory dialog styles */
+.directory-dialog {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+}
+
+.directory-dialog-content {
+  background-color: white;
+  padding: 20px;
+  border-radius: 8px;
+  min-width: 400px;
+  max-width: 600px;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+.directory-dialog h3 {
+  margin: 0 0 15px 0;
+  color: #2c3e50;
+}
+
+.current-path {
+  padding: 8px;
+  background-color: #f8f9fa;
+  border-radius: 4px;
+  margin-bottom: 15px;
+  word-break: break-all;
+  font-family: monospace;
+}
+
+.directory-list {
+  max-height: 300px;
+  overflow-y: auto;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  margin-bottom: 15px;
+}
+
+.directory-item {
+  padding: 8px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid #eee;
+  transition: background-color 0.2s ease;
+}
+
+.directory-item:last-child {
+  border-bottom: none;
+}
+
+.directory-item:hover {
+  background-color: #f8f9fa;
+}
+
+.dialog-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
 } 
