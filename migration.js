@@ -17,7 +17,7 @@ for (let i = 0; i < args.length; i++) {
 const API_URL = 'http://localhost:1337/api/projects/group-by-year';
 const COLLAGES_SOURCE = path.join(__dirname, '..', 'jackie_collage_integration', 'data', 'collages_flattened');
 const GALLERY_SOURCE = path.join(__dirname, '..', 'jackie_collage_integration', 'data', 'project_folders');
-const OUTPUT_DIR = path.join(__dirname, '..', 'jackie_collage_integration', 'project-folders');
+let OUTPUT_DIR = path.join(__dirname, '..', 'jackie_collage_integration', 'project-folders');
 
 // Utility functions
 async function ensureDirectoryExists(dirPath) {
@@ -186,6 +186,12 @@ async function main() {
         const configData = await fs.readFile(configPath, 'utf8');
         config = JSON.parse(configData);
         console.log('Loaded configuration:', config);
+        
+        // Set custom output directory if provided
+        if (config.destinationPath) {
+          OUTPUT_DIR = config.destinationPath;
+          console.log(`Using custom output directory: ${OUTPUT_DIR}`);
+        }
       } catch (error) {
         console.error('Error loading configuration:', error.message);
       }
@@ -193,6 +199,7 @@ async function main() {
     
     // Ensure output directory exists
     await ensureDirectoryExists(OUTPUT_DIR);
+    console.log(`Output directory: ${OUTPUT_DIR}`);
     
     // Get project names from API
     console.log('Fetching project names from API...');

@@ -16,16 +16,19 @@ app.get('/', (req, res) => {
 
 // API endpoint to run the migration
 app.post('/api/run-migration', async (req, res) => {
-  const { directories } = req.body;
+  const { directories, destinationPath } = req.body;
   
   if (!directories || !Array.isArray(directories) || directories.length === 0) {
     return res.status(400).json({ error: 'No directories provided' });
   }
   
   try {
-    // Create a temporary configuration file with the selected directories
+    // Create a temporary configuration file with the selected directories and destination path
     const configPath = path.join(__dirname, 'temp-config.json');
-    await fs.writeFile(configPath, JSON.stringify({ directories }, null, 2));
+    await fs.writeFile(configPath, JSON.stringify({ 
+      directories,
+      destinationPath: destinationPath || null
+    }, null, 2));
     
     // Run the migration script
     exec(`node migration.js --config ${configPath}`, (error, stdout, stderr) => {

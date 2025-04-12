@@ -32,6 +32,44 @@ header h1 {
   color: #2c3e50;
 }
 
+/* Destination section styles */
+.destination-section {
+  margin-bottom: 30px;
+  padding: 15px;
+  background-color: #f8f9fa;
+  border-radius: 8px;
+  border: 1px solid #ddd;
+}
+
+.destination-section h2 {
+  margin-bottom: 15px;
+  font-size: 18px;
+  color: #2c3e50;
+}
+
+.destination-input {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 10px;
+  width: 100%;
+}
+
+#destinationPath {
+  flex: 1;
+  padding: 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 16px;
+  min-width: 400px;
+  width: 100%;
+}
+
+.destination-help {
+  font-size: 14px;
+  color: #666;
+  font-style: italic;
+}
+
 /* Drop zone styles */
 .drop-zone {
   border: 2px dashed #3498db;

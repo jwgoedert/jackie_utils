@@ -13,24 +13,33 @@
       <p>Drag and drop directories to organize project files</p>
     </header>
 
-    <div class="drop-zone" id="drop-zone">
+    <div class="destination-section">
+      <h2>Output Destination</h2>
+      <div class="destination-input">
+        <input type="text" id="destinationPath" placeholder="Enter destination path or leave blank for default" value="">
+        <button id="browseButton" class="secondary-button">Browse</button>
+      </div>
+      <p class="destination-help">Default: jackie_collage_integration/project-folders</p>
+    </div>
+
+    <div class="drop-zone" id="dropZone">
       <div class="drop-zone-content">
         <img src="drop-icon.svg" alt="Drop icon" class="drop-icon">
         <p>Drag & drop directories here</p>
         <p class="drop-zone-subtitle">or</p>
-        <button id="browse-button">Browse Files</button>
-        <input type="file" id="file-input" webkitdirectory directory multiple style="display: none;">
+        <button id="browseFilesButton">Browse Files</button>
+        <input type="file" id="fileInput" webkitdirectory directory multiple style="display: none;">
       </div>
     </div>
 
-    <div class="selected-files" id="selected-files">
+    <div class="selected-files" id="selectedFiles">
       <h2>Selected Directories</h2>
-      <ul id="files-list"></ul>
+      <ul id="filesList"></ul>
     </div>
 
     <div class="controls">
-      <button id="run-migration" class="primary-button" disabled>Run Migration</button>
-      <button id="clear-selection" class="secondary-button">Clear Selection</button>
+      <button id="runButton" class="primary-button" disabled>Run Migration</button>
+      <button id="clearButton" class="secondary-button">Clear Selection</button>
     </div>
 
     <div class="output-container">
@@ -41,21 +50,21 @@
       </div>
       <div class="output-content">
         <div id="console-output" class="tab-content active">
-          <pre id="console-text"></pre>
+          <pre id="consoleText"></pre>
         </div>
         <div id="logs-output" class="tab-content">
           <div class="log-files">
             <div class="log-file">
               <h3>Project Directories Log</h3>
-              <pre id="projects-log"></pre>
+              <pre id="projectsLog"></pre>
             </div>
             <div class="log-file">
               <h3>Collage Output Log</h3>
-              <pre id="collage-log"></pre>
+              <pre id="collageLog"></pre>
             </div>
             <div class="log-file">
               <h3>Gallery Output Log</h3>
-              <pre id="gallery-log"></pre>
+              <pre id="galleryLog"></pre>
             </div>
           </div>
         </div>
