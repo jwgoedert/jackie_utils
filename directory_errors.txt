@@ -1,0 +1,10 @@
+[2025-04-16T18:50:22.564Z] DIRECTORY_MATCH:
+    Source: /Volumes/T7 Shield/JACKIESUMELL.COM/NV Hermans House 2002-2020/2020 THTHB UCSCIAS Barring Freedom/2020 THTHB UCSCIAS Barring Freedom_gallery
+    Target: /Users/jwgoedert_t2studio/work_hub/jackie_sumell/jackie_sumell_web/jackie_utils/project-folders/2020 THTHB UCSCIAS Barring Freedom/2020 THTHB UCSCIAS Barring Freedom_gallery
+    Status: FAILED
+    Reason: No media files found in source gallery
+[2025-04-16T18:50:22.571Z] DIRECTORY_MATCH:
+    Source: /Volumes/T7 Shield/JACKIESUMELL.COM/NV Tea Parties 2021-2024/2022 MoMA PS1 Tea Party/2022 MoMA PS1 Tea Party_gallery
+    Target: /Users/jwgoedert_t2studio/work_hub/jackie_sumell/jackie_sumell_web/jackie_utils/project-folders/2022 MoMA PS1 Tea Party/2022 MoMA PS1 Tea Party_gallery
+    Status: FAILED
+    Reason: No media files found in source gallery
