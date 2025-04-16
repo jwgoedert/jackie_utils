@@ -17,6 +17,9 @@ const CONFIG = {
   validVideoExts: ['.mp4', '.mov', '.avi', '.webm']
 };
 
+// Add near the top of the file, after the require statements
+const shouldProcess = process.argv.includes('--process');
+
 // CSV writer setup
 const csvWriter = createCsvWriter({
   path: CONFIG.csvPath,
@@ -82,12 +85,24 @@ class Logger {
 const logger = new Logger(CONFIG.logPath, CONFIG.dirMatchesPath);
 
 // Helper functions
+function normalizeName(name) {
+  return name
+    .trim()  // Remove trailing/leading spaces
+    .replace(/['']/g, "'")  // Normalize apostrophes
+    .replace(/\s+/g, ' ')   // Replace multiple spaces with single space
+    .replace(/(\d+)([A-Za-z])/g, '$1 $2')  // Add space after numbers if missing
+    .replace(/_+/g, '_')    // Normalize multiple underscores
+    .replace(/\s+_gallery$/i, '_gallery');  // Fix spacing before _gallery suffix
+}
+
 function extractYearAndName(folderName) {
-  const match = folderName.match(/^(\d{4})\s+(.+)$/);
+  // Normalize the folder name first
+  const normalizedName = normalizeName(folderName);
+  const match = normalizedName.match(/^(\d{4})\s+(.+)$/);
   if (!match) return null;
   return {
     year: match[1],
-    name: match[2]
+    name: match[2].trim() // Ensure no trailing spaces
   };
 }
 
@@ -293,9 +308,34 @@ async function verifyProjectDirectory(projectDir) {
   }
 }
 
+// Add a cleanup function at the start of main()
+async function cleanTargetDirectory() {
+  try {
+    console.log(`Cleaning target directory: ${CONFIG.targetDir}`);
+    await fs.rm(CONFIG.targetDir, { recursive: true, force: true });
+    await fs.mkdir(CONFIG.targetDir, { recursive: true });
+    console.log('Target directory cleaned successfully.');
+  } catch (error) {
+    console.error('Error cleaning target directory:', error);
+    throw error;
+  }
+}
+
 // Update main execution function
 async function main() {
   try {
+    if (shouldProcess) {
+      const proceed = await askUserConfirmation(
+        'This will delete all contents in the target directory. Are you sure you want to proceed? (y/N): '
+      );
+      if (!proceed) {
+        console.log('Operation cancelled.');
+        return;
+      }
+      await cleanTargetDirectory();
+    }
+
+    // Clear the directory errors at the start
     await fs.writeFile(logger.dirErrorsPath, '');
 
     console.log('Searching for project directories...');
@@ -311,21 +351,26 @@ async function main() {
       }
     }
 
+    // Write all directory errors to file
     await logger.writeDirectoryErrors();
 
     console.log(`\nVerification complete. ${verifiedDirs.length} of ${projectDirs.length} directories ready for processing.`);
-    console.log('\nPlease review directory_matches.txt and directory_errors.txt and confirm if you want to proceed with processing.');
-    console.log('You can run the script again to continue processing.');
+    
+    if (!shouldProcess) {
+      console.log('\nPlease review directory_matches.txt and directory_errors.txt');
+      console.log('To process the verified directories, run the script again with --process flag:');
+      console.log('node process_images.js --process');
+      return;
+    }
 
-    // Uncomment the following section when ready to process files
-    /*
+    // Process files if --process flag is present
     console.log('\nProcessing verified directories...');
     for (const projectDir of verifiedDirs) {
       console.log(`Processing project directory: ${projectDir}`);
       await processProject(projectDir);
     }
     console.log('Processing complete. Check the log files for any issues.');
-    */
+
   } catch (error) {
     console.error('Fatal error:', error);
     process.exit(1);
