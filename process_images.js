@@ -17,10 +17,11 @@ const CONFIG = {
   csvPath: './file_mapping.csv',
   logPath: './processing_errors.log',
   dirMatchesPath: './directory_matches.txt',
-  validImageExts: ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.tif', '.pdf'],
+  validImageExts: ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.tif', '.pdf', '.heic', '.psd', '.ai'],
   validVideoExts: ['.mp4', '.mov', '.avi', '.webm'],
   ffmpegPath: '/opt/homebrew/bin/ffmpeg',  // Add explicit ffmpeg path
-  pdftocairoPath: '/opt/homebrew/bin/pdftocairo' // Add explicit pdftocairo path
+  pdftocairoPath: '/opt/homebrew/bin/pdftocairo', // Add explicit pdftocairo path
+  convertPath: '/opt/homebrew/bin/convert' // ImageMagick's convert command
 };
 
 // Set ffmpeg path
@@ -157,14 +158,13 @@ async function processPdf(inputPath, outputPath) {
   try {
     const tempPrefix = path.join(path.dirname(outputPath), 'temp_pdf_convert');
     
-    // Use pdftocairo to convert PDF to PNG with high resolution
-    const cmd = `"${CONFIG.pdftocairoPath}" -png -r 300 -f 1 -l 1 "${inputPath}" "${tempPrefix}"`;
+    // Use pdftocairo with more robust options
+    const cmd = `"${CONFIG.pdftocairoPath}" -png -r 150 -f 1 -l 1 -scale-to 2500 "${inputPath}" "${tempPrefix}"`;
     await execPromise(cmd);
     
-    // The output file will be temp_pdf_convert-1.png
     const tempPath = `${tempPrefix}-1.png`;
     
-    // Use sharp to resize and optimize the converted image
+    // Use sharp for final processing
     await sharp(tempPath)
       .resize(CONFIG.maxDimension, CONFIG.maxDimension, {
         fit: 'inside',
@@ -172,22 +172,21 @@ async function processPdf(inputPath, outputPath) {
       })
       .png({ 
         quality: 90,
-        compressionLevel: 9, // Maximum compression
-        palette: true // Use palette-based quantization for smaller file size
+        compressionLevel: 9,
+        palette: true
       })
       .toFile(outputPath);
 
-    // Verify the output file was created and check its size
+    // Check file size and compress if needed
     const stats = await fs.stat(outputPath);
     const fileSizeMB = stats.size / (1024 * 1024);
     if (fileSizeMB > 1) {
-      // If file is still large, try additional compression
       await sharp(outputPath)
         .png({ 
           quality: 80,
           compressionLevel: 9,
           palette: true,
-          colors: 256 // Reduce color palette for smaller size
+          colors: 256
         })
         .toFile(outputPath + '.tmp');
       
@@ -195,8 +194,13 @@ async function processPdf(inputPath, outputPath) {
       await fs.rename(outputPath + '.tmp', outputPath);
     }
 
-    // Clean up the temporary file
-    await fs.unlink(tempPath);
+    // Clean up temporary file
+    try {
+      await fs.access(tempPath);
+      await fs.unlink(tempPath);
+    } catch (error) {
+      // File doesn't exist, no need to clean up
+    }
     return true;
   } catch (error) {
     await logger.log(`Error processing PDF ${inputPath}: ${error.message}`);
@@ -204,15 +208,93 @@ async function processPdf(inputPath, outputPath) {
   }
 }
 
-// Update processImage function to handle PDFs
+// Add function to process special formats (HEIC, PSD, AI)
+async function processSpecialFormat(inputPath, outputPath) {
+  try {
+    const tempPath = outputPath.replace('.png', '_temp.png');
+    const ext = path.extname(inputPath).toLowerCase();
+    
+    // For HEIC files, use sharp with heif support
+    if (ext === '.heic') {
+      await sharp(inputPath, { failOnError: false })
+        .resize(CONFIG.maxDimension, CONFIG.maxDimension, {
+          fit: 'inside',
+          withoutEnlargement: true
+        })
+        .png({ 
+          quality: 90,
+          compressionLevel: 9,
+          palette: true
+        })
+        .toFile(outputPath);
+      return true;
+    }
+
+    // For PSD and AI files, use ImageMagick with density setting
+    const isAI = ext === '.ai';
+    const cmd = `"${CONFIG.convertPath}" ${isAI ? '[0]' : ''} -density 300 "${inputPath}" -resize ${CONFIG.maxDimension}x${CONFIG.maxDimension}> "${tempPath}"`;
+    await execPromise(cmd);
+    
+    // Use sharp for final processing and optimization
+    await sharp(tempPath)
+      .resize(CONFIG.maxDimension, CONFIG.maxDimension, {
+        fit: 'inside',
+        withoutEnlargement: true
+      })
+      .png({ 
+        quality: 90,
+        compressionLevel: 9,
+        palette: true
+      })
+      .toFile(outputPath);
+
+    // Verify output file size and compress further if needed
+    const stats = await fs.stat(outputPath);
+    const fileSizeMB = stats.size / (1024 * 1024);
+    if (fileSizeMB > 1) {
+      await sharp(outputPath)
+        .png({ 
+          quality: 80,
+          compressionLevel: 9,
+          palette: true,
+          colors: 256
+        })
+        .toFile(outputPath + '.tmp');
+      
+      await fs.unlink(outputPath);
+      await fs.rename(outputPath + '.tmp', outputPath);
+    }
+
+    // Clean up temporary file
+    try {
+      await fs.access(tempPath);
+      await fs.unlink(tempPath);
+    } catch (error) {
+      // File doesn't exist, no need to clean up
+    }
+    return true;
+  } catch (error) {
+    await logger.log(`Error processing special format ${inputPath}: ${error.message}`);
+    return false;
+  }
+}
+
+// Update processImage function to handle special formats
 async function processImage(inputPath, outputPath, maxDimension) {
   try {
-    // If it's a PDF, use the PDF processor
-    if (path.extname(inputPath).toLowerCase() === '.pdf') {
+    const ext = path.extname(inputPath).toLowerCase();
+    
+    // Handle special formats
+    if (['.heic', '.psd', '.ai'].includes(ext)) {
+      return await processSpecialFormat(inputPath, outputPath);
+    }
+    
+    // Handle PDFs
+    if (ext === '.pdf') {
       return await processPdf(inputPath, outputPath);
     }
 
-    // Otherwise process as regular image
+    // Process regular images
     const image = sharp(inputPath);
     const metadata = await image.metadata();
     
@@ -265,12 +347,32 @@ async function processImage(inputPath, outputPath, maxDimension) {
   }
 }
 
+// Update processVideo function to be more robust
 async function processVideo(inputPath, outputPath) {
   return new Promise((resolve, reject) => {
+    // Add error checking for input file
+    if (!inputPath || !outputPath) {
+      console.log('Invalid input or output path for video processing');
+      resolve(false);
+      return;
+    }
+
+    console.log(`Processing video: ${path.basename(inputPath)}`);
     ffmpeg(inputPath)
       .size('2500x?')
       .format('webm')
-      .on('end', () => resolve(true))
+      .on('start', (commandLine) => {
+        console.log('Started ffmpeg with command:', commandLine);
+      })
+      .on('progress', (progress) => {
+        if (progress.percent) {
+          console.log(`Processing: ${Math.round(progress.percent)}% done`);
+        }
+      })
+      .on('end', () => {
+        console.log(`Successfully processed video: ${path.basename(inputPath)}`);
+        resolve(true);
+      })
       .on('error', async (err) => {
         await logger.log(`Error processing video ${inputPath}: ${err.message}`);
         resolve(false);
@@ -306,7 +408,7 @@ async function getMediaFiles(directory) {
   }
 }
 
-// Update processProject function
+// Update processProject to handle video files better
 async function processProject(projectDir) {
   const projectInfo = extractYearAndName(path.basename(projectDir));
   if (!projectInfo) {
@@ -330,20 +432,49 @@ async function processProject(projectDir) {
       return;
     }
 
+    // Get list of already processed files
+    let existingFiles = [];
+    try {
+      existingFiles = await fs.readdir(targetGalleryDir);
+    } catch (error) {
+      // Directory might not exist yet, that's fine
+    }
+
     const csvData = [];
     for (let i = 0; i < mediaFiles.length; i++) {
       const file = mediaFiles[i];
       const ext = path.extname(file).toLowerCase();
       const originalPath = path.join(sourceGalleryDir, file);
-      const newFileName = formatNewFileName(year, name, i + 1, mediaFiles.length, '.png');
+      
+      // Use different extensions for images and videos
+      const isVideo = CONFIG.validVideoExts.includes(ext);
+      const newExt = isVideo ? '.webm' : '.png';
+      const newFileName = formatNewFileName(year, name, i + 1, mediaFiles.length, newExt);
       const newPath = path.join(targetGalleryDir, newFileName);
 
+      // Skip if file already exists
+      if (existingFiles.includes(newFileName)) {
+        console.log(`Skipping already processed file: ${file} -> ${newFileName}`);
+        
+        // Add to CSV data even if skipped to maintain complete record
+        csvData.push({
+          originalName: file,
+          newName: newFileName,
+          originalPath: originalPath,
+          newPath: newPath,
+          projectName: name,
+          year: year
+        });
+        continue;
+      }
+
+      console.log(`Processing ${i + 1}/${mediaFiles.length}: ${file}`);
       let success = false;
-      if (CONFIG.validImageExts.includes(ext)) {
+
+      if (isVideo) {
+        success = await processVideo(originalPath, newPath);
+      } else {
         success = await processImage(originalPath, newPath, CONFIG.maxDimension);
-      } else if (CONFIG.validVideoExts.includes(ext)) {
-        const webmPath = newPath.replace('.png', '.webm');
-        success = await processVideo(originalPath, webmPath);
       }
 
       if (success) {
@@ -355,10 +486,15 @@ async function processProject(projectDir) {
           projectName: name,
           year: year
         });
+        console.log(`Successfully processed: ${file} -> ${newFileName}`);
+      } else {
+        console.log(`Failed to process: ${file}`);
       }
     }
 
-    await csvWriter.writeRecords(csvData);
+    if (csvData.length > 0) {
+      await csvWriter.writeRecords(csvData);
+    }
 
   } catch (error) {
     if (error.code === 'ENOENT') {
@@ -435,22 +571,29 @@ async function verifyProjectDirectory(projectDir) {
       }
 
       // Check target gallery directory
+      let existingFiles = [];
       try {
         await fs.access(targetGalleryDir);
-        // If gallery exists, check if it's empty
-        const targetFiles = await fs.readdir(targetGalleryDir);
-        if (targetFiles.length > 0) {
-          await logger.logDirectoryMatch(sourceGalleryDir, targetGalleryDir, 'FAILED', 'Target gallery directory exists and is not empty');
-          return false;
-        }
+        existingFiles = await fs.readdir(targetGalleryDir);
       } catch (error) {
         // Create target directories if they don't exist
         await fs.mkdir(targetProjectDir, { recursive: true });
         await fs.mkdir(targetGalleryDir, { recursive: true });
       }
 
-      await logger.logDirectoryMatch(sourceGalleryDir, targetGalleryDir, 'SUCCESS', `Found ${mediaFiles.length} media files to process`);
-      return true;
+      // Count how many files still need processing
+      const processedFileCount = existingFiles.length;
+      const remainingFileCount = mediaFiles.length - processedFileCount;
+      
+      if (remainingFileCount > 0) {
+        await logger.logDirectoryMatch(sourceGalleryDir, targetGalleryDir, 'SUCCESS', 
+          `Found ${mediaFiles.length} total media files, ${remainingFileCount} still need processing`);
+        return true;
+      } else {
+        await logger.logDirectoryMatch(sourceGalleryDir, targetGalleryDir, 'SKIPPED', 
+          `All ${mediaFiles.length} files already processed`);
+        return false;
+      }
 
     } catch (error) {
       await logger.logDirectoryMatch(sourceGalleryDir, '', 'FAILED', 'Source gallery directory not found');
