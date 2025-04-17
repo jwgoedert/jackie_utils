@@ -208,14 +208,35 @@ async function processPdf(inputPath, outputPath) {
   }
 }
 
-// Add function to process special formats (HEIC, PSD, AI)
+// Add timeout wrapper for exec commands
+async function execWithTimeout(command, timeoutMs = 60000) {
+  return new Promise(async (resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error(`Command timed out after ${timeoutMs/1000} seconds`));
+    }, timeoutMs);
+
+    try {
+      const result = await execPromise(command);
+      clearTimeout(timeout);
+      resolve(result);
+    } catch (error) {
+      clearTimeout(timeout);
+      reject(error);
+    }
+  });
+}
+
+// Update processSpecialFormat function
 async function processSpecialFormat(inputPath, outputPath) {
   try {
     const tempPath = outputPath.replace('.png', '_temp.png');
     const ext = path.extname(inputPath).toLowerCase();
     
+    console.log(`Processing special format file: ${path.basename(inputPath)}`);
+    
     // For HEIC files, use sharp with heif support
     if (ext === '.heic') {
+      console.log('Using sharp for HEIC processing...');
       await sharp(inputPath, { failOnError: false })
         .resize(CONFIG.maxDimension, CONFIG.maxDimension, {
           fit: 'inside',
@@ -227,13 +248,29 @@ async function processSpecialFormat(inputPath, outputPath) {
           palette: true
         })
         .toFile(outputPath);
+      console.log('HEIC processing complete');
       return true;
     }
 
     // For PSD and AI files, use ImageMagick with density setting
     const isAI = ext === '.ai';
-    const cmd = `"${CONFIG.convertPath}" ${isAI ? '[0]' : ''} -density 300 "${inputPath}" -resize ${CONFIG.maxDimension}x${CONFIG.maxDimension}> "${tempPath}"`;
-    await execPromise(cmd);
+    console.log(`Using ImageMagick for ${isAI ? 'AI' : 'PSD'} processing...`);
+    
+    // Construct the ImageMagick command
+    const magickCmd = `"${CONFIG.convertPath}" ${isAI ? '[0]' : ''} -density 300 "${inputPath}" -resize ${CONFIG.maxDimension}x${CONFIG.maxDimension}> "${tempPath}"`;
+    console.log('Running ImageMagick command...');
+    
+    try {
+      // Set a 2-minute timeout for ImageMagick operations
+      await execWithTimeout(magickCmd, 120000);
+    } catch (error) {
+      if (error.message.includes('timed out')) {
+        throw new Error(`ImageMagick processing timed out for ${path.basename(inputPath)}`);
+      }
+      throw error;
+    }
+    
+    console.log('ImageMagick processing complete, optimizing with sharp...');
     
     // Use sharp for final processing and optimization
     await sharp(tempPath)
@@ -252,6 +289,7 @@ async function processSpecialFormat(inputPath, outputPath) {
     const stats = await fs.stat(outputPath);
     const fileSizeMB = stats.size / (1024 * 1024);
     if (fileSizeMB > 1) {
+      console.log('File size > 1MB, performing additional compression...');
       await sharp(outputPath)
         .png({ 
           quality: 80,
@@ -269,20 +307,25 @@ async function processSpecialFormat(inputPath, outputPath) {
     try {
       await fs.access(tempPath);
       await fs.unlink(tempPath);
+      console.log('Temporary files cleaned up');
     } catch (error) {
       // File doesn't exist, no need to clean up
     }
+    
+    console.log(`Successfully processed: ${path.basename(inputPath)}`);
     return true;
   } catch (error) {
     await logger.log(`Error processing special format ${inputPath}: ${error.message}`);
+    console.log(`Failed to process ${path.basename(inputPath)}: ${error.message}`);
     return false;
   }
 }
 
-// Update processImage function to handle special formats
+// Update processImage to include better progress monitoring
 async function processImage(inputPath, outputPath, maxDimension) {
   try {
     const ext = path.extname(inputPath).toLowerCase();
+    console.log(`Processing image: ${path.basename(inputPath)}`);
     
     // Handle special formats
     if (['.heic', '.psd', '.ai'].includes(ext)) {
@@ -295,6 +338,7 @@ async function processImage(inputPath, outputPath, maxDimension) {
     }
 
     // Process regular images
+    console.log('Processing with sharp...');
     const image = sharp(inputPath);
     const metadata = await image.metadata();
     
@@ -317,22 +361,22 @@ async function processImage(inputPath, outputPath, maxDimension) {
       })
       .png({ 
         quality: 90,
-        compressionLevel: 9, // Maximum compression
-        palette: true // Use palette-based quantization for smaller file size
+        compressionLevel: 9,
+        palette: true
       })
       .toFile(outputPath);
 
-    // Verify the output file was created and log its size
+    console.log('Initial processing complete, checking file size...');
     const stats = await fs.stat(outputPath);
     const fileSizeMB = stats.size / (1024 * 1024);
     if (fileSizeMB > 1) {
-      // If file is still large, try additional compression
+      console.log('File size > 1MB, performing additional compression...');
       await sharp(outputPath)
         .png({ 
           quality: 80,
           compressionLevel: 9,
           palette: true,
-          colors: 256 // Reduce color palette for smaller size
+          colors: 256
         })
         .toFile(outputPath + '.tmp');
       
@@ -340,9 +384,11 @@ async function processImage(inputPath, outputPath, maxDimension) {
       await fs.rename(outputPath + '.tmp', outputPath);
     }
 
+    console.log(`Successfully processed: ${path.basename(inputPath)}`);
     return true;
   } catch (error) {
     await logger.log(`Error processing image ${inputPath}: ${error.message}`);
+    console.log(`Failed to process ${path.basename(inputPath)}: ${error.message}`);
     return false;
   }
 }
