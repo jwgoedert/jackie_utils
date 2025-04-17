@@ -4,6 +4,10 @@ const sharp = require('sharp');
 const csv = require('csv-parser');
 const createCsvWriter = require('csv-writer').createObjectCsvWriter;
 const ffmpeg = require('fluent-ffmpeg');
+const readline = require('readline');
+const { exec } = require('child_process');
+const util = require('util');
+const execPromise = util.promisify(exec);
 
 // Configuration
 const CONFIG = {
@@ -14,8 +18,13 @@ const CONFIG = {
   logPath: './processing_errors.log',
   dirMatchesPath: './directory_matches.txt',
   validImageExts: ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.tif', '.pdf'],
-  validVideoExts: ['.mp4', '.mov', '.avi', '.webm']
+  validVideoExts: ['.mp4', '.mov', '.avi', '.webm'],
+  ffmpegPath: '/opt/homebrew/bin/ffmpeg',  // Add explicit ffmpeg path
+  pdftocairoPath: '/opt/homebrew/bin/pdftocairo' // Add explicit pdftocairo path
 };
+
+// Set ffmpeg path
+ffmpeg.setFfmpegPath(CONFIG.ffmpegPath);
 
 // Add near the top of the file, after the require statements
 const shouldProcess = process.argv.includes('--process');
@@ -32,6 +41,15 @@ const csvWriter = createCsvWriter({
     { id: 'year', title: 'Year' }
   ]
 });
+
+// Enhanced IGNORED_PATTERNS with more comprehensive hidden file patterns
+const IGNORED_PATTERNS = [
+  /^\._/,         // macOS resource fork files
+  /^\.DS_Store$/, // macOS system files
+  /^Thumbs\.db$/, // Windows thumbnail files
+  /^\./, // Any file starting with dot
+  /^__MACOSX$/   // macOS archive files
+];
 
 // Enhanced Logger setup
 class Logger {
@@ -92,40 +110,153 @@ function normalizeName(name) {
     .replace(/\s+/g, ' ')   // Replace multiple spaces with single space
     .replace(/(\d+)([A-Za-z])/g, '$1 $2')  // Add space after numbers if missing
     .replace(/_+/g, '_')    // Normalize multiple underscores
-    .replace(/\s+_gallery$/i, '_gallery');  // Fix spacing before _gallery suffix
+    .replace(/\s+_gallery$/i, '_gallery')  // Fix spacing before _gallery suffix
+    .replace(/\s+$/, '')    // Extra check for trailing spaces
+    .replace(/^\s+/, '');   // Extra check for leading spaces
 }
 
+// Update directory comparison function
+function isSameDirectory(dir1, dir2) {
+  const norm1 = normalizeName(dir1);
+  const norm2 = normalizeName(dir2);
+  return norm1 === norm2;
+}
+
+// Update extractYearAndName function
 function extractYearAndName(folderName) {
-  // Normalize the folder name first
-  const normalizedName = normalizeName(folderName);
+  // Extra thorough cleaning before normalization
+  const cleaned = folderName
+    .replace(/\s+/g, ' ')   // Replace multiple spaces with single space
+    .trim();                // Remove trailing/leading spaces
+    
+  // Normalize the folder name
+  const normalizedName = normalizeName(cleaned);
   const match = normalizedName.match(/^(\d{4})\s+(.+)$/);
   if (!match) return null;
+  
   return {
     year: match[1],
-    name: match[2].trim() // Ensure no trailing spaces
+    name: match[2].trim() // Ensure no trailing spaces in name
   };
 }
 
+// Update formatNewFileName function
 function formatNewFileName(year, projectName, index, total, ext) {
+  const cleanProjectName = projectName
+    .trim()
+    .replace(/\s+/g, '_')   // Replace spaces with single underscore
+    .replace(/_+/g, '_');   // Normalize multiple underscores
+  
   const paddedIndex = String(index).padStart(2, '0');
   const paddedTotal = String(total).padStart(2, '0');
-  return `${year}_${projectName.replace(/\s+/g, '_')}_image${paddedIndex}of${paddedTotal}${ext}`;
+  return `${year}_${cleanProjectName}_image${paddedIndex}of${paddedTotal}${ext}`;
 }
 
+// Add PDF processing function
+async function processPdf(inputPath, outputPath) {
+  try {
+    const tempPrefix = path.join(path.dirname(outputPath), 'temp_pdf_convert');
+    
+    // Use pdftocairo to convert PDF to PNG with high resolution
+    const cmd = `"${CONFIG.pdftocairoPath}" -png -r 300 -f 1 -l 1 "${inputPath}" "${tempPrefix}"`;
+    await execPromise(cmd);
+    
+    // The output file will be temp_pdf_convert-1.png
+    const tempPath = `${tempPrefix}-1.png`;
+    
+    // Use sharp to resize and optimize the converted image
+    await sharp(tempPath)
+      .resize(CONFIG.maxDimension, CONFIG.maxDimension, {
+        fit: 'inside',
+        withoutEnlargement: true
+      })
+      .png({ 
+        quality: 90,
+        compressionLevel: 9, // Maximum compression
+        palette: true // Use palette-based quantization for smaller file size
+      })
+      .toFile(outputPath);
+
+    // Verify the output file was created and check its size
+    const stats = await fs.stat(outputPath);
+    const fileSizeMB = stats.size / (1024 * 1024);
+    if (fileSizeMB > 1) {
+      // If file is still large, try additional compression
+      await sharp(outputPath)
+        .png({ 
+          quality: 80,
+          compressionLevel: 9,
+          palette: true,
+          colors: 256 // Reduce color palette for smaller size
+        })
+        .toFile(outputPath + '.tmp');
+      
+      await fs.unlink(outputPath);
+      await fs.rename(outputPath + '.tmp', outputPath);
+    }
+
+    // Clean up the temporary file
+    await fs.unlink(tempPath);
+    return true;
+  } catch (error) {
+    await logger.log(`Error processing PDF ${inputPath}: ${error.message}`);
+    return false;
+  }
+}
+
+// Update processImage function to handle PDFs
 async function processImage(inputPath, outputPath, maxDimension) {
   try {
+    // If it's a PDF, use the PDF processor
+    if (path.extname(inputPath).toLowerCase() === '.pdf') {
+      return await processPdf(inputPath, outputPath);
+    }
+
+    // Otherwise process as regular image
     const image = sharp(inputPath);
     const metadata = await image.metadata();
     
-    const isLandscape = metadata.width > metadata.height;
-    const resizeOptions = isLandscape 
-      ? { width: maxDimension, height: null }
-      : { width: null, height: maxDimension };
+    // Calculate dimensions while maintaining aspect ratio
+    let width = metadata.width;
+    let height = metadata.height;
+    
+    if (width > height && width > maxDimension) {
+      height = Math.round((height * maxDimension) / width);
+      width = maxDimension;
+    } else if (height > maxDimension) {
+      width = Math.round((width * maxDimension) / height);
+      height = maxDimension;
+    }
 
     await image
-      .resize(resizeOptions)
-      .png({ quality: 90 })
+      .resize(width, height, {
+        fit: 'inside',
+        withoutEnlargement: true
+      })
+      .png({ 
+        quality: 90,
+        compressionLevel: 9, // Maximum compression
+        palette: true // Use palette-based quantization for smaller file size
+      })
       .toFile(outputPath);
+
+    // Verify the output file was created and log its size
+    const stats = await fs.stat(outputPath);
+    const fileSizeMB = stats.size / (1024 * 1024);
+    if (fileSizeMB > 1) {
+      // If file is still large, try additional compression
+      await sharp(outputPath)
+        .png({ 
+          quality: 80,
+          compressionLevel: 9,
+          palette: true,
+          colors: 256 // Reduce color palette for smaller size
+        })
+        .toFile(outputPath + '.tmp');
+      
+      await fs.unlink(outputPath);
+      await fs.rename(outputPath + '.tmp', outputPath);
+    }
 
     return true;
   } catch (error) {
@@ -148,7 +279,34 @@ async function processVideo(inputPath, outputPath) {
   });
 }
 
-// Main processing function
+// Update getMediaFiles function to be more explicit about file types
+async function getMediaFiles(directory) {
+  try {
+    const files = await fs.readdir(directory);
+    return files.filter(file => {
+      // Skip system files and hidden files using enhanced patterns
+      if (IGNORED_PATTERNS.some(pattern => pattern.test(file) || pattern.test(path.basename(file)))) {
+        return false;
+      }
+      
+      const ext = path.extname(file).toLowerCase();
+      const isValidFile = CONFIG.validImageExts.includes(ext) || 
+                         CONFIG.validVideoExts.includes(ext);
+      
+      if (!isValidFile) {
+        // Log unsupported file extensions
+        logger.log(`Skipping unsupported file extension: ${ext} in file ${file}`, 'INFO');
+      }
+      
+      return isValidFile;
+    });
+  } catch (error) {
+    await logger.log(`Error getting media files from ${directory}: ${error.message}`);
+    return [];
+  }
+}
+
+// Update processProject function
 async function processProject(projectDir) {
   const projectInfo = extractYearAndName(path.basename(projectDir));
   if (!projectInfo) {
@@ -161,19 +319,16 @@ async function processProject(projectDir) {
   const targetGalleryDir = path.join(CONFIG.targetDir, `${year} ${name}`, `${year} ${name}_gallery`);
   
   try {
-    const files = await fs.readdir(sourceGalleryDir);
-    if (files.length === 0) {
-      await logger.logProjectIssue(name, 'No files found in gallery directory');
-      return;
-    }
-
-    const mediaFiles = files.filter(file => {
-      const ext = path.extname(file).toLowerCase();
-      return CONFIG.validImageExts.includes(ext) || CONFIG.validVideoExts.includes(ext);
-    });
-
     // Create target gallery directory
     await fs.mkdir(targetGalleryDir, { recursive: true });
+
+    // Get filtered media files
+    const mediaFiles = await getMediaFiles(sourceGalleryDir);
+    
+    if (mediaFiles.length === 0) {
+      await logger.logProjectIssue(name, 'No valid media files found in gallery directory');
+      return;
+    }
 
     const csvData = [];
     for (let i = 0; i < mediaFiles.length; i++) {
@@ -321,20 +476,24 @@ async function cleanTargetDirectory() {
   }
 }
 
-// Update main execution function
+// Add this after the Logger class but before main()
+function askUserConfirmation(question) {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+  });
+
+  return new Promise(resolve => {
+    rl.question(question, (answer) => {
+      rl.close();
+      resolve(answer.toLowerCase() === 'y');
+    });
+  });
+}
+
+// Update the main function
 async function main() {
   try {
-    if (shouldProcess) {
-      const proceed = await askUserConfirmation(
-        'This will delete all contents in the target directory. Are you sure you want to proceed? (y/N): '
-      );
-      if (!proceed) {
-        console.log('Operation cancelled.');
-        return;
-      }
-      await cleanTargetDirectory();
-    }
-
     // Clear the directory errors at the start
     await fs.writeFile(logger.dirErrorsPath, '');
 
@@ -356,21 +515,41 @@ async function main() {
 
     console.log(`\nVerification complete. ${verifiedDirs.length} of ${projectDirs.length} directories ready for processing.`);
     
-    if (!shouldProcess) {
+    if (shouldProcess) {
+      const proceed = await askUserConfirmation(
+        'This will process all verified directories. Are you sure you want to proceed? (y/N): '
+      );
+      
+      if (!proceed) {
+        console.log('Operation cancelled.');
+        return;
+      }
+
+      // Process files if --process flag is present
+      console.log('\nProcessing verified directories...');
+      let successCount = 0;
+      let failureCount = 0;
+
+      for (const projectDir of verifiedDirs) {
+        console.log(`\nProcessing project directory: ${projectDir}`);
+        try {
+          await processProject(projectDir);
+          successCount++;
+        } catch (error) {
+          await logger.log(`Failed to process directory ${projectDir}: ${error.message}`);
+          failureCount++;
+        }
+      }
+
+      console.log('\nProcessing complete:');
+      console.log(`- Successfully processed: ${successCount} directories`);
+      console.log(`- Failed to process: ${failureCount} directories`);
+      console.log('Check the log files for any issues.');
+    } else {
       console.log('\nPlease review directory_matches.txt and directory_errors.txt');
       console.log('To process the verified directories, run the script again with --process flag:');
       console.log('node process_images.js --process');
-      return;
     }
-
-    // Process files if --process flag is present
-    console.log('\nProcessing verified directories...');
-    for (const projectDir of verifiedDirs) {
-      console.log(`Processing project directory: ${projectDir}`);
-      await processProject(projectDir);
-    }
-    console.log('Processing complete. Check the log files for any issues.');
-
   } catch (error) {
     console.error('Fatal error:', error);
     process.exit(1);
