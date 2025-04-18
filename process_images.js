@@ -1,7 +1,6 @@
 const fs = require('fs').promises;
 const path = require('path');
 const sharp = require('sharp');
-const csv = require('csv-parser');
 const createCsvWriter = require('csv-writer').createObjectCsvWriter;
 const ffmpeg = require('fluent-ffmpeg');
 const readline = require('readline');
@@ -246,52 +245,52 @@ function normalizeDirectoryName(dirName) {
     .trim();                        // Remove leading/trailing spaces
 
   // Handle "The Abolitionist's" patterns consistently
-  const abolitionistPattern = /\b(?:the\s+)?abolitionists?['']s?\b/gi;
-  if (normalized.match(abolitionistPattern)) {
-    // Preserve or add "The" for specific patterns
-    const hasThe = /\bthe\s+abolitionists?['']s?\s+(sanctuary|fieldguide|apothecarts|tea\s+party)/i.test(normalized);
-    const matchWord = normalized.match(/\b(?:the\s+)?abolitionists?['']s?\s+(\w+)/i)?.[1];
+//   const abolitionistPattern = /\b(?:the\s+)?abolitionists?['']s?\b/gi;
+//   if (normalized.match(abolitionistPattern)) {
+//     // Preserve or add "The" for specific patterns
+//     const hasThe = /\bthe\s+abolitionists?['']s?\s+(sanctuary|fieldguide|apothecarts|tea\s+party)/i.test(normalized);
+//     const matchWord = normalized.match(/\b(?:the\s+)?abolitionists?['']s?\s+(\w+)/i)?.[1];
     
-    if (hasThe || ['Sanctuary', 'Fieldguide', 'Apothecarts', 'Tea'].includes(matchWord)) {
-      normalized = normalized.replace(abolitionistPattern, "The Abolitionist's");
-    } else {
-      normalized = normalized.replace(abolitionistPattern, "Abolitionist's");
-    }
-  }
+//     if (hasThe || ['Sanctuary', 'Fieldguide', 'Apothecarts', 'Tea'].includes(matchWord)) {
+//       normalized = normalized.replace(abolitionistPattern, "The Abolitionist's");
+//     } else {
+//       normalized = normalized.replace(abolitionistPattern, "Abolitionist's");
+//     }
+//   }
 
   // Handle case-sensitive words consistently
-  const uppercaseWords = ['MoMA', 'PS1', 'THTHB', 'UCSCIAS', 'JTLC', 'NYC', 'UVM'];
-  uppercaseWords.forEach(word => {
-    const regex = new RegExp(word, 'i');
-    if (normalized.match(regex)) {
-      normalized = normalized.replace(regex, word);
-    }
-  });
+//   const uppercaseWords = ['MoMA', 'PS1', 'THTHB', 'UCSCIAS', 'JTLC', 'NYC', 'UVM'];
+//   uppercaseWords.forEach(word => {
+//     const regex = new RegExp(word, 'i');
+//     if (normalized.match(regex)) {
+//       normalized = normalized.replace(regex, word);
+//     }
+//   });
 
   // Handle special case words that should be lowercase
-  const lowercaseWords = ['to', 'at', 'in', 'for', 'of', 'and'];
-  lowercaseWords.forEach(word => {
-    const regex = new RegExp(`\\b${word}\\b`, 'gi');
-    normalized = normalized.replace(regex, word.toLowerCase());
-  });
+//   const lowercaseWords = ['to', 'at', 'in', 'for', 'of', 'and'];
+//   lowercaseWords.forEach(word => {
+//     const regex = new RegExp(`\\b${word}\\b`, 'gi');
+//     normalized = normalized.replace(regex, word.toLowerCase());
+//   });
 
   // Special handling for "The" - preserve it in specific patterns
-  const preserveThePattern = /^The\s+(?:Abolitionist's|Locker\s+Room|Garrison|Alien\s+Apothecary)/i;
-  if (!preserveThePattern.test(normalized)) {
-    normalized = normalized.replace(/\bThe\b/g, 'the');
-  }
+//   const preserveThePattern = /^The\s+(?:Abolitionist's|Locker\s+Room|Garrison|Alien\s+Apothecary)/i;
+//   if (!preserveThePattern.test(normalized)) {
+//     normalized = normalized.replace(/\bThe\b/g, 'the');
+//   }
   
   // Handle year prefix consistently
-  const yearPrefix = /^(\d{4})\s+(.+)$/;
-  if (yearPrefix.test(normalized)) {
-    const match = normalized.match(yearPrefix);
-    const year = match[1];
-    const name = match[2];
-    normalized = `${year} ${name}`;
-  }
+//   const yearPrefix = /^(\d{4})\s+(.+)$/;
+//   if (yearPrefix.test(normalized)) {
+//     const match = normalized.match(yearPrefix);
+//     const year = match[1];
+//     const name = match[2];
+//     normalized = `${year} ${name}`;
+//   }
   
   // Remove any remaining special characters that might cause issues
-  normalized = normalized.replace(/[^\w\s\-\.]/g, '');
+//   normalized = normalized.replace(/[^\w\s\-\.]/g, '');
   
   // Ensure no double spaces
   normalized = normalized.replace(/\s+/g, ' ').trim();
@@ -299,16 +298,6 @@ function normalizeDirectoryName(dirName) {
   return normalized;
 }
 
-// Update the directory creation/renaming function to use standardized apostrophes
-async function createTargetDirectories(targetPath) {
-  try {
-    // Standardize apostrophes in the path
-    targetPath = standardizeApostrophes(targetPath);
-    await fs.mkdir(targetPath, { recursive: true });
-  } catch (error) {
-    await logger.log(`Error creating directory ${targetPath}: ${error.message}`);
-  }
-}
 
 // Update the file renaming function to use standardized apostrophes
 function formatNewFileName(year, projectName, index, total, ext) {
@@ -317,50 +306,6 @@ function formatNewFileName(year, projectName, index, total, ext) {
   const paddedIndex = String(index).padStart(2, '0');
   const paddedTotal = String(total).padStart(2, '0');
   return `${year}_${projectName.replace(/\s+/g, '_')}_image${paddedIndex}of${paddedTotal}${ext}`;
-}
-
-// Update the directory comparison function to be more precise
-function compareDirectoryNames(sourceName, targetName) {
-  console.log('\nComparing directories:');
-  console.log('Source:', sourceName);
-  console.log('Target:', targetName);
-
-  // First try exact match
-  if (sourceName === targetName) {
-    console.log('✓ Exact match');
-    return true;
-  }
-  
-  // Then try normalized match
-  const normalizedSource = normalizeDirectoryName(sourceName);
-  const normalizedTarget = normalizeDirectoryName(targetName);
-  
-  if (normalizedSource === normalizedTarget) {
-    console.log('✓ Normalized match');
-    return true;
-  }
-  
-  // Try case-insensitive match
-  if (normalizedSource.toLowerCase() === normalizedTarget.toLowerCase()) {
-    console.log('✓ Case-insensitive match');
-    return true;
-  }
-  
-  // Try matching without underscores and extra spaces
-  const cleanSource = normalizedSource.replace(/[_\s]+/g, ' ').trim();
-  const cleanTarget = normalizedTarget.replace(/[_\s]+/g, ' ').trim();
-  
-  if (cleanSource.toLowerCase() === cleanTarget.toLowerCase()) {
-    console.log('✓ Clean match');
-    return true;
-  }
-
-  console.log('✗ No match');
-  console.log('Normalized source:', normalizedSource);
-  console.log('Normalized target:', normalizedTarget);
-  console.log('Clean source:', cleanSource);
-  console.log('Clean target:', cleanTarget);
-  return false;
 }
 
 // Update extractYearAndName function
@@ -833,7 +778,10 @@ async function verifyProjectDirectory(projectDir) {
   }
 
   const { year, name } = projectInfo;
-  const sourceGalleryDir = path.join(projectDir, `${year} ${name}_gallery`);
+  const sourceName = `${year} ${name}`;
+  // Standardize apostrophes in the name before adding _gallery suffix
+  const standardizedName = standardizeApostrophes(name);
+  const sourceGalleryDir = path.join(projectDir, `${year} ${standardizedName}_gallery`);
 
   try {
     // Find matching target directory
@@ -845,7 +793,6 @@ async function verifyProjectDirectory(projectDir) {
       const targetDirs = await fs.readdir(targetBaseDir);
       
       // Normalize source name for comparison
-      const sourceName = `${year} ${name}`;
       const normalizedSourceName = normalizeDirectoryName(sourceName);
       
       // Find matching directory - try multiple matching strategies
@@ -968,8 +915,9 @@ async function processProject(projectDir) {
 
   const { year, name } = projectInfo;
   const sourceName = `${year} ${name}`;
-  // Standardize apostrophes in the gallery directory path
-  const sourceGalleryDir = standardizePathApostrophes(path.join(projectDir, `${year} ${name}_gallery`));
+  // Standardize apostrophes in the name before adding _gallery suffix
+  const standardizedName = standardizeApostrophes(name);
+  const sourceGalleryDir = path.join(projectDir, `${year} ${standardizedName}_gallery`);
 
   try {
     // Find matching target directory
