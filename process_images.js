@@ -9,7 +9,59 @@ const { exec } = require('child_process');
 const util = require('util');
 const execPromise = util.promisify(exec);
 
-// Configuration
+// System verification function
+async function verifySystemRequirements() {
+  const checks = [];
+  
+  // Check Sharp installation and plugins
+  try {
+    // Just check the version info - don't try to process any images
+    const version = sharp.versions;
+    checks.push({ 
+      name: 'Sharp', 
+      status: 'OK', 
+      version: `v${version.sharp} (libvips ${version.vips})`
+    });
+  } catch (error) {
+    checks.push({ 
+      name: 'Sharp', 
+      status: 'ERROR', 
+      error: 'Sharp not properly installed. Try: npm rebuild sharp'
+    });
+  }
+
+  // Check ImageMagick
+  try {
+    const { stdout } = await execPromise('convert -version');
+    checks.push({ name: 'ImageMagick', status: 'OK', version: stdout.split('\n')[0] });
+  } catch (error) {
+    checks.push({ name: 'ImageMagick', status: 'ERROR', error: error.message });
+  }
+
+  // Check ffmpeg
+  try {
+    const { stdout } = await execPromise('ffmpeg -version');
+    checks.push({ name: 'ffmpeg', status: 'OK', version: stdout.split('\n')[0] });
+  } catch (error) {
+    checks.push({ name: 'ffmpeg', status: 'ERROR', error: error.message });
+  }
+
+  // Check libheif
+  try {
+    const { stdout } = await execPromise('brew list libheif');
+    checks.push({ name: 'libheif', status: 'OK' });
+  } catch (error) {
+    checks.push({ 
+      name: 'libheif', 
+      status: 'ERROR', 
+      error: 'libheif not installed. Install with: brew install libheif'
+    });
+  }
+
+  return checks;
+}
+
+// Configuration with detailed comments
 const CONFIG = {
   maxDimension: 2500,
   sourceDir: process.env.SOURCE_DIR || '/Volumes/T7 Shield/JACKIESUMELL.COM',
@@ -17,11 +69,25 @@ const CONFIG = {
   csvPath: './file_mapping.csv',
   logPath: './processing_errors.log',
   dirMatchesPath: './directory_matches.txt',
-  validImageExts: ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.tif', '.pdf', '.heic', '.psd', '.ai'],
+  directoryMismatchLog: './directory_mismatches.log',
+  processingStatsLog: './processing_stats.log',  // New log for processing statistics
+  validImageExts: ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.tif', '.pdf', '.heic', '.psd', '.ai', '.tiff'],
   validVideoExts: ['.mp4', '.mov', '.avi', '.webm'],
-  ffmpegPath: '/opt/homebrew/bin/ffmpeg',  // Add explicit ffmpeg path
-  pdftocairoPath: '/opt/homebrew/bin/pdftocairo', // Add explicit pdftocairo path
-  convertPath: '/opt/homebrew/bin/convert' // ImageMagick's convert command
+  ffmpegPath: '/opt/homebrew/bin/ffmpeg',
+  pdftocairoPath: '/opt/homebrew/bin/pdftocairo',
+  convertPath: '/opt/homebrew/bin/convert',
+  // Processing options
+  imageCompression: {
+    quality: 90,
+    compressionLevel: 9,
+    palette: true
+  },
+  // Timeouts
+  timeouts: {
+    imagemagick: 120000,  // 2 minutes
+    ffmpeg: 300000,       // 5 minutes
+    pdf: 180000          // 3 minutes
+  }
 };
 
 // Set ffmpeg path
@@ -52,15 +118,23 @@ const IGNORED_PATTERNS = [
   /^__MACOSX$/   // macOS archive files
 ];
 
-// Enhanced Logger setup
+// Enhanced Logger class
 class Logger {
   constructor(logPath, dirMatchesPath) {
     this.logPath = logPath;
     this.dirMatchesPath = dirMatchesPath;
     this.dirErrorsPath = './directory_errors.txt';
+    this.directoryMismatchPath = CONFIG.directoryMismatchLog;
+    this.processingStatsPath = CONFIG.processingStatsLog;
     this.errors = [];
     this.dirMatches = [];
     this.dirErrors = [];
+    this.stats = {
+      totalFiles: 0,
+      processedFiles: 0,
+      failedFiles: 0,
+      byExtension: {}
+    };
   }
 
   async log(message, type = 'ERROR') {
@@ -99,28 +173,194 @@ class Logger {
       console.error('Error writing directory errors:', error);
     }
   }
+
+  async logDirectoryMismatch(sourceDir, details) {
+    const timestamp = new Date().toISOString();
+    const logEntry = `[${timestamp}] DIRECTORY_MISMATCH:
+    Source Directory: ${sourceDir}
+    Details: ${details}
+    Files Found:\n`;
+
+    try {
+      const files = await fs.readdir(sourceDir);
+      const filesList = files.map(file => `      - ${file}`).join('\n');
+      await fs.appendFile(this.directoryMismatchPath, logEntry + filesList + '\n\n');
+    } catch (error) {
+      await fs.appendFile(this.directoryMismatchPath, 
+        logEntry + '    Error reading directory contents: ' + error.message + '\n\n');
+    }
+  }
+
+  async updateStats(file, success) {
+    const ext = path.extname(file).toLowerCase();
+    if (!this.stats.byExtension[ext]) {
+      this.stats.byExtension[ext] = { total: 0, success: 0, failed: 0 };
+    }
+    
+    this.stats.byExtension[ext].total++;
+    if (success) {
+      this.stats.byExtension[ext].success++;
+      this.stats.processedFiles++;
+    } else {
+      this.stats.byExtension[ext].failed++;
+      this.stats.failedFiles++;
+    }
+    
+    // Write stats to file
+    await fs.writeFile(
+      this.processingStatsPath,
+      JSON.stringify(this.stats, null, 2)
+    );
+  }
 }
 
 const logger = new Logger(CONFIG.logPath, CONFIG.dirMatchesPath);
 
-// Helper functions
-function normalizeName(name) {
-  return name
-    .trim()  // Remove trailing/leading spaces
-    .replace(/['']/g, "'")  // Normalize apostrophes
-    .replace(/\s+/g, ' ')   // Replace multiple spaces with single space
-    .replace(/(\d+)([A-Za-z])/g, '$1 $2')  // Add space after numbers if missing
-    .replace(/_+/g, '_')    // Normalize multiple underscores
-    .replace(/\s+_gallery$/i, '_gallery')  // Fix spacing before _gallery suffix
-    .replace(/\s+$/, '')    // Extra check for trailing spaces
-    .replace(/^\s+/, '');   // Extra check for leading spaces
+// Update standardizeApostrophes function to use typographical apostrophe
+function standardizeApostrophes(dirName) {
+  // Convert all apostrophe variants to the typographical apostrophe (U+2019)
+  const typographicalApostrophe = '\u2019';
+  const before = dirName;
+  const after = dirName.replace(/[′‵՚Ꞌꞌ᾽᾿`´ʹʼ']/g, typographicalApostrophe);
+  
+  if (before !== after) {
+    console.log('Apostrophe standardization:');
+    console.log('  Before:', before);
+    console.log('  After:', after);
+    console.log('  Before apostrophe codes:', Array.from(before.match(/[′‵՚Ꞌꞌ᾽᾿`´ʹʼ']/g) || []).map(c => `U+${c.charCodeAt(0).toString(16).toUpperCase()}`));
+    console.log('  After apostrophe codes:', Array.from(after.match(/\u2019/g) || []).map(c => `U+${c.charCodeAt(0).toString(16).toUpperCase()}`));
+  }
+  
+  return after;
 }
 
-// Update directory comparison function
-function isSameDirectory(dir1, dir2) {
-  const norm1 = normalizeName(dir1);
-  const norm2 = normalizeName(dir2);
-  return norm1 === norm2;
+// Update normalizeDirectoryName to use standardizeApostrophes first
+function normalizeDirectoryName(dirName) {
+  if (!dirName) return '';
+  
+  // First, standardize apostrophes using the dedicated function
+  let normalized = standardizeApostrophes(dirName)
+    .replace(/[""]/g, '')            // Remove quotes
+    .replace(/_gallery$/i, '')       // Remove gallery suffix case-insensitive
+    .replace(/\s+/g, ' ')           // Normalize multiple spaces to single space
+    .trim();                        // Remove leading/trailing spaces
+
+  // Handle "The Abolitionist's" patterns consistently
+  const abolitionistPattern = /\b(?:the\s+)?abolitionists?['']s?\b/gi;
+  if (normalized.match(abolitionistPattern)) {
+    // Preserve or add "The" for specific patterns
+    const hasThe = /\bthe\s+abolitionists?['']s?\s+(sanctuary|fieldguide|apothecarts|tea\s+party)/i.test(normalized);
+    const matchWord = normalized.match(/\b(?:the\s+)?abolitionists?['']s?\s+(\w+)/i)?.[1];
+    
+    if (hasThe || ['Sanctuary', 'Fieldguide', 'Apothecarts', 'Tea'].includes(matchWord)) {
+      normalized = normalized.replace(abolitionistPattern, "The Abolitionist's");
+    } else {
+      normalized = normalized.replace(abolitionistPattern, "Abolitionist's");
+    }
+  }
+
+  // Handle case-sensitive words consistently
+  const uppercaseWords = ['MoMA', 'PS1', 'THTHB', 'UCSCIAS', 'JTLC', 'NYC', 'UVM'];
+  uppercaseWords.forEach(word => {
+    const regex = new RegExp(word, 'i');
+    if (normalized.match(regex)) {
+      normalized = normalized.replace(regex, word);
+    }
+  });
+
+  // Handle special case words that should be lowercase
+  const lowercaseWords = ['to', 'at', 'in', 'for', 'of', 'and'];
+  lowercaseWords.forEach(word => {
+    const regex = new RegExp(`\\b${word}\\b`, 'gi');
+    normalized = normalized.replace(regex, word.toLowerCase());
+  });
+
+  // Special handling for "The" - preserve it in specific patterns
+  const preserveThePattern = /^The\s+(?:Abolitionist's|Locker\s+Room|Garrison|Alien\s+Apothecary)/i;
+  if (!preserveThePattern.test(normalized)) {
+    normalized = normalized.replace(/\bThe\b/g, 'the');
+  }
+  
+  // Handle year prefix consistently
+  const yearPrefix = /^(\d{4})\s+(.+)$/;
+  if (yearPrefix.test(normalized)) {
+    const match = normalized.match(yearPrefix);
+    const year = match[1];
+    const name = match[2];
+    normalized = `${year} ${name}`;
+  }
+  
+  // Remove any remaining special characters that might cause issues
+  normalized = normalized.replace(/[^\w\s\-\.]/g, '');
+  
+  // Ensure no double spaces
+  normalized = normalized.replace(/\s+/g, ' ').trim();
+
+  return normalized;
+}
+
+// Update the directory creation/renaming function to use standardized apostrophes
+async function createTargetDirectories(targetPath) {
+  try {
+    // Standardize apostrophes in the path
+    targetPath = standardizeApostrophes(targetPath);
+    await fs.mkdir(targetPath, { recursive: true });
+  } catch (error) {
+    await logger.log(`Error creating directory ${targetPath}: ${error.message}`);
+  }
+}
+
+// Update the file renaming function to use standardized apostrophes
+function formatNewFileName(year, projectName, index, total, ext) {
+  // Standardize apostrophes in the project name
+  projectName = standardizeApostrophes(projectName);
+  const paddedIndex = String(index).padStart(2, '0');
+  const paddedTotal = String(total).padStart(2, '0');
+  return `${year}_${projectName.replace(/\s+/g, '_')}_image${paddedIndex}of${paddedTotal}${ext}`;
+}
+
+// Update the directory comparison function to be more precise
+function compareDirectoryNames(sourceName, targetName) {
+  console.log('\nComparing directories:');
+  console.log('Source:', sourceName);
+  console.log('Target:', targetName);
+
+  // First try exact match
+  if (sourceName === targetName) {
+    console.log('✓ Exact match');
+    return true;
+  }
+  
+  // Then try normalized match
+  const normalizedSource = normalizeDirectoryName(sourceName);
+  const normalizedTarget = normalizeDirectoryName(targetName);
+  
+  if (normalizedSource === normalizedTarget) {
+    console.log('✓ Normalized match');
+    return true;
+  }
+  
+  // Try case-insensitive match
+  if (normalizedSource.toLowerCase() === normalizedTarget.toLowerCase()) {
+    console.log('✓ Case-insensitive match');
+    return true;
+  }
+  
+  // Try matching without underscores and extra spaces
+  const cleanSource = normalizedSource.replace(/[_\s]+/g, ' ').trim();
+  const cleanTarget = normalizedTarget.replace(/[_\s]+/g, ' ').trim();
+  
+  if (cleanSource.toLowerCase() === cleanTarget.toLowerCase()) {
+    console.log('✓ Clean match');
+    return true;
+  }
+
+  console.log('✗ No match');
+  console.log('Normalized source:', normalizedSource);
+  console.log('Normalized target:', normalizedTarget);
+  console.log('Clean source:', cleanSource);
+  console.log('Clean target:', cleanTarget);
+  return false;
 }
 
 // Update extractYearAndName function
@@ -131,26 +371,44 @@ function extractYearAndName(folderName) {
     .trim();                // Remove trailing/leading spaces
     
   // Normalize the folder name
-  const normalizedName = normalizeName(cleaned);
+  const normalizedName = normalizeDirectoryName(cleaned);
+  
+  console.log(`Processing folder name: "${folderName}"`);
+  console.log(`Normalized name: "${normalizedName}"`);
+  
+  // Try to match year and name pattern
   const match = normalizedName.match(/^(\d{4})\s+(.+)$/);
-  if (!match) return null;
+  if (match) {
+    const result = {
+      year: match[1],
+      name: match[2].trim() // Ensure no trailing spaces in name
+    };
+    console.log(`Found year at start: ${result.year}, name: ${result.name}`);
+    return result;
+  }
   
-  return {
-    year: match[1],
-    name: match[2].trim() // Ensure no trailing spaces in name
-  };
-}
-
-// Update formatNewFileName function
-function formatNewFileName(year, projectName, index, total, ext) {
-  const cleanProjectName = projectName
-    .trim()
-    .replace(/\s+/g, '_')   // Replace spaces with single underscore
-    .replace(/_+/g, '_');   // Normalize multiple underscores
+  // Try to find year anywhere in the string
+  const yearMatch = normalizedName.match(/(\d{4})/);
+  if (yearMatch) {
+    const year = yearMatch[1];
+    // Remove the year and any surrounding spaces or special characters
+    const name = normalizedName
+      .replace(year, '')
+      .replace(/^[\s\-_]+|[\s\-_]+$/g, '') // Remove leading/trailing spaces, hyphens, underscores
+      .trim();
+      
+    if (name) {
+      const result = {
+        year: year,
+        name: name
+      };
+      console.log(`Found year in string: ${result.year}, name: ${result.name}`);
+      return result;
+    }
+  }
   
-  const paddedIndex = String(index).padStart(2, '0');
-  const paddedTotal = String(total).padStart(2, '0');
-  return `${year}_${cleanProjectName}_image${paddedIndex}of${paddedTotal}${ext}`;
+  console.log('No valid year found in folder name');
+  return null;
 }
 
 // Add PDF processing function
@@ -238,6 +496,7 @@ async function processSpecialFormat(inputPath, outputPath) {
     if (ext === '.heic') {
       console.log('Using sharp for HEIC processing...');
       await sharp(inputPath, { failOnError: false })
+        .rotate() // Auto-rotate based on EXIF orientation
         .resize(CONFIG.maxDimension, CONFIG.maxDimension, {
           fit: 'inside',
           withoutEnlargement: true
@@ -256,12 +515,11 @@ async function processSpecialFormat(inputPath, outputPath) {
     const isAI = ext === '.ai';
     console.log(`Using ImageMagick for ${isAI ? 'AI' : 'PSD'} processing...`);
     
-    // Construct the ImageMagick command
-    const magickCmd = `"${CONFIG.convertPath}" ${isAI ? '[0]' : ''} -density 300 "${inputPath}" -resize ${CONFIG.maxDimension}x${CONFIG.maxDimension}> "${tempPath}"`;
+    // Construct the ImageMagick command with auto-orient
+    const magickCmd = `"${CONFIG.convertPath}" ${isAI ? '[0]' : ''} -density 300 "${inputPath}" -auto-orient -resize ${CONFIG.maxDimension}x${CONFIG.maxDimension}> "${tempPath}"`;
     console.log('Running ImageMagick command...');
     
     try {
-      // Set a 2-minute timeout for ImageMagick operations
       await execWithTimeout(magickCmd, 120000);
     } catch (error) {
       if (error.message.includes('timed out')) {
@@ -274,6 +532,7 @@ async function processSpecialFormat(inputPath, outputPath) {
     
     // Use sharp for final processing and optimization
     await sharp(tempPath)
+      .rotate() // Ensure proper rotation is maintained
       .resize(CONFIG.maxDimension, CONFIG.maxDimension, {
         fit: 'inside',
         withoutEnlargement: true
@@ -291,6 +550,7 @@ async function processSpecialFormat(inputPath, outputPath) {
     if (fileSizeMB > 1) {
       console.log('File size > 1MB, performing additional compression...');
       await sharp(outputPath)
+        .rotate() // Maintain rotation
         .png({ 
           quality: 80,
           compressionLevel: 9,
@@ -321,12 +581,41 @@ async function processSpecialFormat(inputPath, outputPath) {
   }
 }
 
-// Update processImage to include better progress monitoring
+// Add validation function
+function validateFile(filePath, ext) {
+  // Check if file exists and is readable
+  try {
+    fs.accessSync(filePath, fs.constants.R_OK);
+  } catch (error) {
+    throw new Error(`File not accessible: ${error.message}`);
+  }
+
+  // Validate extension
+  const fileExt = path.extname(filePath).toLowerCase();
+  if (ext && fileExt !== ext.toLowerCase()) {
+    throw new Error(`Invalid file extension: expected ${ext}, got ${fileExt}`);
+  }
+
+  return true;
+}
+
+// Update processImage with additional safety checks
 async function processImage(inputPath, outputPath, maxDimension) {
   try {
     const ext = path.extname(inputPath).toLowerCase();
     console.log(`Processing image: ${path.basename(inputPath)}`);
     
+    // Validate input file
+    await validateFile(inputPath);
+    
+    // Ensure output directory exists
+    const outputDir = path.dirname(outputPath);
+    try {
+      await fs.access(outputDir);
+    } catch (error) {
+      throw new Error(`Output directory does not exist: ${outputDir}`);
+    }
+
     // Handle special formats
     if (['.heic', '.psd', '.ai'].includes(ext)) {
       return await processSpecialFormat(inputPath, outputPath);
@@ -340,8 +629,15 @@ async function processImage(inputPath, outputPath, maxDimension) {
     // Process regular images
     console.log('Processing with sharp...');
     const image = sharp(inputPath);
-    const metadata = await image.metadata();
     
+    // Get metadata including orientation
+    const metadata = await image.metadata();
+    console.log(`Original image metadata: ${JSON.stringify(metadata, null, 2)}`);
+    
+    if (!metadata.width || !metadata.height) {
+      throw new Error('Invalid image dimensions in metadata');
+    }
+
     // Calculate dimensions while maintaining aspect ratio
     let width = metadata.width;
     let height = metadata.height;
@@ -354,46 +650,71 @@ async function processImage(inputPath, outputPath, maxDimension) {
       height = maxDimension;
     }
 
-    await image
+    // Create processing pipeline
+    let pipeline = image
+      .rotate() // Auto-rotate based on EXIF orientation
       .resize(width, height, {
         fit: 'inside',
         withoutEnlargement: true
-      })
-      .png({ 
-        quality: 90,
-        compressionLevel: 9,
-        palette: true
-      })
-      .toFile(outputPath);
+      });
 
-    console.log('Initial processing complete, checking file size...');
+    // If original has alpha channel, preserve it
+    if (metadata.hasAlpha) {
+      pipeline = pipeline.png(CONFIG.imageCompression);
+    } else {
+      pipeline = pipeline.png(CONFIG.imageCompression);
+    }
+
+    // Process the image
+    await pipeline.toFile(outputPath);
+
+    // Verify the output and check orientation
+    const outputMetadata = await sharp(outputPath).metadata();
+    console.log(`Processed image metadata: ${JSON.stringify(outputMetadata, null, 2)}`);
+
+    // Verify output dimensions
+    if (!outputMetadata.width || !outputMetadata.height) {
+      throw new Error('Invalid output image dimensions');
+    }
+
+    // Check file size and compress if needed
     const stats = await fs.stat(outputPath);
     const fileSizeMB = stats.size / (1024 * 1024);
     if (fileSizeMB > 1) {
       console.log('File size > 1MB, performing additional compression...');
+      const tmpPath = outputPath + '.tmp';
       await sharp(outputPath)
+        .rotate() // Maintain rotation
         .png({ 
+          ...CONFIG.imageCompression,
           quality: 80,
-          compressionLevel: 9,
-          palette: true,
           colors: 256
         })
-        .toFile(outputPath + '.tmp');
+        .toFile(tmpPath);
       
-      await fs.unlink(outputPath);
-      await fs.rename(outputPath + '.tmp', outputPath);
+      // Verify compressed file before replacing
+      const compressedStats = await fs.stat(tmpPath);
+      if (compressedStats.size > 0) {
+        await fs.unlink(outputPath);
+        await fs.rename(tmpPath, outputPath);
+      } else {
+        throw new Error('Compressed file is empty');
+      }
     }
 
+    // Update processing stats
+    await logger.updateStats(inputPath, true);
     console.log(`Successfully processed: ${path.basename(inputPath)}`);
     return true;
   } catch (error) {
+    await logger.updateStats(inputPath, false);
     await logger.log(`Error processing image ${inputPath}: ${error.message}`);
     console.log(`Failed to process ${path.basename(inputPath)}: ${error.message}`);
     return false;
   }
 }
 
-// Update processVideo function to be more robust
+// Update processVideo with additional safety checks
 async function processVideo(inputPath, outputPath) {
   return new Promise((resolve, reject) => {
     // Add error checking for input file
@@ -404,6 +725,13 @@ async function processVideo(inputPath, outputPath) {
     }
 
     console.log(`Processing video: ${path.basename(inputPath)}`);
+    
+    // Create a timeout
+    const timeout = setTimeout(() => {
+      console.log(`Video processing timed out after ${CONFIG.timeouts.ffmpeg/1000} seconds`);
+      resolve(false);
+    }, CONFIG.timeouts.ffmpeg);
+
     ffmpeg(inputPath)
       .size('2500x?')
       .format('webm')
@@ -415,12 +743,28 @@ async function processVideo(inputPath, outputPath) {
           console.log(`Processing: ${Math.round(progress.percent)}% done`);
         }
       })
-      .on('end', () => {
-        console.log(`Successfully processed video: ${path.basename(inputPath)}`);
-        resolve(true);
+      .on('end', async () => {
+        clearTimeout(timeout);
+        // Verify output file
+        try {
+          const stats = await fs.stat(outputPath);
+          if (stats.size === 0) {
+            await logger.log(`Error: Output video file is empty: ${outputPath}`);
+            resolve(false);
+            return;
+          }
+          console.log(`Successfully processed video: ${path.basename(inputPath)}`);
+          await logger.updateStats(inputPath, true);
+          resolve(true);
+        } catch (error) {
+          await logger.log(`Error verifying video output: ${error.message}`);
+          resolve(false);
+        }
       })
       .on('error', async (err) => {
+        clearTimeout(timeout);
         await logger.log(`Error processing video ${inputPath}: ${err.message}`);
+        await logger.updateStats(inputPath, false);
         resolve(false);
       })
       .save(outputPath);
@@ -454,8 +798,168 @@ async function getMediaFiles(directory) {
   }
 }
 
-// Update processProject to handle video files better
+// Add new function to standardize apostrophes in full paths
+function standardizePathApostrophes(fullPath) {
+  // Split path into components
+  const parts = fullPath.split(path.sep);
+  
+  // Standardize apostrophes in each part
+  const standardizedParts = parts.map(part => standardizeApostrophes(part));
+  
+  // Log if any changes were made
+  const before = fullPath;
+  const after = standardizedParts.join(path.sep);
+  if (before !== after) {
+    console.log('\nPath apostrophe standardization:');
+    console.log('  Before:', before);
+    console.log('  After:', after);
+    console.log('  Changed parts:');
+    parts.forEach((part, i) => {
+      if (part !== standardizedParts[i]) {
+        console.log(`    - "${part}" → "${standardizedParts[i]}"`);
+      }
+    });
+  }
+  
+  return after;
+}
+
+// Update verifyProjectDirectory to handle paths correctly
+async function verifyProjectDirectory(projectDir) {
+  const projectInfo = extractYearAndName(path.basename(projectDir));
+  if (!projectInfo) {
+    await logger.logDirectoryMatch(projectDir, '', 'FAILED', 'Invalid project folder name format');
+    return false;
+  }
+
+  const { year, name } = projectInfo;
+  const sourceGalleryDir = path.join(projectDir, `${year} ${name}_gallery`);
+
+  try {
+    // Find matching target directory
+    let targetProjectDir = null;
+    let targetGalleryDir = null;
+    
+    try {
+      const targetBaseDir = CONFIG.targetDir;
+      const targetDirs = await fs.readdir(targetBaseDir);
+      
+      // Normalize source name for comparison
+      const sourceName = `${year} ${name}`;
+      const normalizedSourceName = normalizeDirectoryName(sourceName);
+      
+      // Find matching directory - try multiple matching strategies
+      let matchingDir = null;
+      
+      // 1. Try exact match
+      matchingDir = targetDirs.find(dir => dir === sourceName);
+      
+      // 2. Try normalized match
+      if (!matchingDir) {
+        matchingDir = targetDirs.find(dir => 
+          normalizeDirectoryName(dir) === normalizedSourceName
+        );
+      }
+      
+      // 3. Try case-insensitive match
+      if (!matchingDir) {
+        matchingDir = targetDirs.find(dir => 
+          dir.toLowerCase() === sourceName.toLowerCase() ||
+          normalizeDirectoryName(dir).toLowerCase() === normalizedSourceName.toLowerCase()
+        );
+      }
+      
+      // 4. Try partial match (for cases where names might have slight differences)
+      if (!matchingDir) {
+        // Create a simplified version of the name for comparison
+        const simplifiedSource = normalizedSourceName
+          .replace(/[^\w\s]/g, '')  // Remove special characters
+          .replace(/\s+/g, ' ')     // Normalize spaces
+          .trim()
+          .toLowerCase();
+          
+        matchingDir = targetDirs.find(dir => {
+          const simplifiedDir = normalizeDirectoryName(dir)
+            .replace(/[^\w\s]/g, '')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .toLowerCase();
+            
+          return simplifiedDir === simplifiedSource;
+        });
+      }
+
+      if (matchingDir) {
+        targetProjectDir = path.join(targetBaseDir, matchingDir);
+        targetGalleryDir = path.join(targetProjectDir, `${matchingDir}_gallery`);
+      } else {
+        await logger.logDirectoryMismatch(sourceGalleryDir, 
+          `No matching directory found in database structure for: ${sourceName}\n` +
+          `Normalized source name: ${normalizedSourceName}\n` +
+          `Available target directories: ${targetDirs.join(', ')}`);
+        return false;
+      }
+    } catch (error) {
+      await logger.logDirectoryMismatch(sourceGalleryDir, 
+        `Error accessing target directory: ${error.message}`);
+      return false;
+    }
+
+    // Check if source gallery exists and has media files
+    try {
+      await fs.access(sourceGalleryDir);
+      const sourceFiles = await fs.readdir(sourceGalleryDir);
+      const mediaFiles = sourceFiles.filter(file => {
+        const ext = path.extname(file).toLowerCase();
+        return CONFIG.validImageExts.includes(ext) || CONFIG.validVideoExts.includes(ext);
+      });
+
+      if (mediaFiles.length === 0) {
+        await logger.logDirectoryMatch(sourceGalleryDir, targetGalleryDir, 'FAILED', 'No media files found in source gallery');
+        return false;
+      }
+
+      // Check target gallery directory
+      let existingFiles = [];
+      try {
+        await fs.access(targetGalleryDir);
+        existingFiles = await fs.readdir(targetGalleryDir);
+      } catch (error) {
+        await logger.logDirectoryMismatch(sourceGalleryDir, 
+          `Gallery directory does not exist in database structure: ${targetGalleryDir}`);
+        return false;
+      }
+
+      // Count how many files still need processing
+      const processedFileCount = existingFiles.length;
+      const remainingFileCount = mediaFiles.length - processedFileCount;
+      
+      if (remainingFileCount > 0) {
+        await logger.logDirectoryMatch(sourceGalleryDir, targetGalleryDir, 'SUCCESS', 
+          `Found ${mediaFiles.length} total media files, ${remainingFileCount} still need processing`);
+        return true;
+      } else {
+        await logger.logDirectoryMatch(sourceGalleryDir, targetGalleryDir, 'SKIPPED', 
+          `All ${mediaFiles.length} files already processed`);
+        return false;
+      }
+
+    } catch (error) {
+      await logger.logDirectoryMatch(sourceGalleryDir, '', 'FAILED', 'Source gallery directory not found');
+      return false;
+    }
+
+  } catch (error) {
+    await logger.logDirectoryMatch(projectDir, '', 'FAILED', `Error: ${error.message}`);
+    return false;
+  }
+}
+
+// Update processProject to use standardizePathApostrophes
 async function processProject(projectDir) {
+  // Standardize apostrophes in the full project directory path
+  projectDir = standardizePathApostrophes(projectDir);
+  
   const projectInfo = extractYearAndName(path.basename(projectDir));
   if (!projectInfo) {
     await logger.logProjectIssue(projectDir, 'Invalid project folder name format');
@@ -463,12 +967,67 @@ async function processProject(projectDir) {
   }
 
   const { year, name } = projectInfo;
-  const sourceGalleryDir = path.join(projectDir, `${year} ${name}_gallery`);
-  const targetGalleryDir = path.join(CONFIG.targetDir, `${year} ${name}`, `${year} ${name}_gallery`);
-  
+  const sourceName = `${year} ${name}`;
+  // Standardize apostrophes in the gallery directory path
+  const sourceGalleryDir = standardizePathApostrophes(path.join(projectDir, `${year} ${name}_gallery`));
+
   try {
-    // Create target gallery directory
-    await fs.mkdir(targetGalleryDir, { recursive: true });
+    // Find matching target directory
+    const targetBaseDir = CONFIG.targetDir;
+    const targetDirs = await fs.readdir(targetBaseDir);
+    
+    // Normalize source name for comparison
+    const normalizedSourceName = normalizeDirectoryName(sourceName);
+    
+    // Find matching directory - try multiple matching strategies
+    let matchingDir = null;
+    
+    // 1. Try exact match
+    matchingDir = targetDirs.find(dir => dir === sourceName);
+    
+    // 2. Try normalized match
+    if (!matchingDir) {
+      matchingDir = targetDirs.find(dir => 
+        normalizeDirectoryName(dir) === normalizedSourceName
+      );
+    }
+    
+    // 3. Try case-insensitive match
+    if (!matchingDir) {
+      matchingDir = targetDirs.find(dir => 
+        dir.toLowerCase() === sourceName.toLowerCase() ||
+        normalizeDirectoryName(dir).toLowerCase() === normalizedSourceName.toLowerCase()
+      );
+    }
+    
+    // 4. Try partial match (for cases where names might have slight differences)
+    if (!matchingDir) {
+      // Create a simplified version of the name for comparison
+      const simplifiedSource = normalizedSourceName
+        .replace(/[^\w\s]/g, '')  // Remove special characters
+        .replace(/\s+/g, ' ')     // Normalize spaces
+        .trim()
+        .toLowerCase();
+        
+      matchingDir = targetDirs.find(dir => {
+        const simplifiedDir = normalizeDirectoryName(dir)
+          .replace(/[^\w\s]/g, '')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .toLowerCase();
+          
+        return simplifiedDir === simplifiedSource;
+      });
+    }
+
+    if (!matchingDir) {
+      await logger.logProjectIssue(name, `No matching directory found in database structure for: ${sourceName}`);
+      return;
+    }
+
+    // Standardize apostrophes in target paths
+    const targetProjectDir = standardizePathApostrophes(path.join(targetBaseDir, matchingDir));
+    const targetGalleryDir = standardizePathApostrophes(path.join(targetProjectDir, `${matchingDir}_gallery`));
 
     // Get filtered media files
     const mediaFiles = await getMediaFiles(sourceGalleryDir);
@@ -483,7 +1042,8 @@ async function processProject(projectDir) {
     try {
       existingFiles = await fs.readdir(targetGalleryDir);
     } catch (error) {
-      // Directory might not exist yet, that's fine
+      await logger.logProjectIssue(name, `Target gallery directory not found: ${targetGalleryDir}`);
+      return;
     }
 
     const csvData = [];
@@ -517,24 +1077,29 @@ async function processProject(projectDir) {
       console.log(`Processing ${i + 1}/${mediaFiles.length}: ${file}`);
       let success = false;
 
-      if (isVideo) {
-        success = await processVideo(originalPath, newPath);
-      } else {
-        success = await processImage(originalPath, newPath, CONFIG.maxDimension);
-      }
+      try {
+        if (isVideo) {
+          success = await processVideo(originalPath, newPath);
+        } else {
+          success = await processImage(originalPath, newPath, CONFIG.maxDimension);
+        }
 
-      if (success) {
-        csvData.push({
-          originalName: file,
-          newName: newFileName,
-          originalPath: originalPath,
-          newPath: newPath,
-          projectName: name,
-          year: year
-        });
-        console.log(`Successfully processed: ${file} -> ${newFileName}`);
-      } else {
-        console.log(`Failed to process: ${file}`);
+        if (success) {
+          csvData.push({
+            originalName: file,
+            newName: newFileName,
+            originalPath: originalPath,
+            newPath: newPath,
+            projectName: name,
+            year: year
+          });
+          console.log(`Successfully processed: ${file} -> ${newFileName}`);
+        } else {
+          console.log(`Failed to process: ${file}`);
+        }
+      } catch (error) {
+        console.log(`Error processing file ${file}: ${error.message}`);
+        await logger.log(`Error processing file ${file}: ${error.message}`);
       }
     }
 
@@ -551,17 +1116,17 @@ async function processProject(projectDir) {
   }
 }
 
-// New helper function to check if directory is a project directory
+// Simple helper function to check if directory is a project directory
 function isProjectDirectory(dirName) {
   return /^\d{4}\s+.+$/.test(dirName);
 }
 
-// New helper function to check if directory is an NV directory
+// Simple helper function to check if directory is an NV directory
 function isNVDirectory(dirName) {
   return /^NV/.test(dirName);
 }
 
-// New function to recursively find project directories
+// Simple directory finding function
 async function findProjectDirectories(baseDir) {
   const projectDirs = [];
   
@@ -586,70 +1151,6 @@ async function findProjectDirectories(baseDir) {
   }
   
   return projectDirs;
-}
-
-// New function to verify directory structure
-async function verifyProjectDirectory(projectDir) {
-  const projectInfo = extractYearAndName(path.basename(projectDir));
-  if (!projectInfo) {
-    await logger.logDirectoryMatch(projectDir, '', 'FAILED', 'Invalid project folder name format');
-    return false;
-  }
-
-  const { year, name } = projectInfo;
-  const sourceGalleryDir = path.join(projectDir, `${year} ${name}_gallery`);
-  const targetProjectDir = path.join(CONFIG.targetDir, `${year} ${name}`);
-  const targetGalleryDir = path.join(targetProjectDir, `${year} ${name}_gallery`);
-
-  try {
-    // Check if source gallery exists and has media files
-    try {
-      await fs.access(sourceGalleryDir);
-      const sourceFiles = await fs.readdir(sourceGalleryDir);
-      const mediaFiles = sourceFiles.filter(file => {
-        const ext = path.extname(file).toLowerCase();
-        return CONFIG.validImageExts.includes(ext) || CONFIG.validVideoExts.includes(ext);
-      });
-
-      if (mediaFiles.length === 0) {
-        await logger.logDirectoryMatch(sourceGalleryDir, targetGalleryDir, 'FAILED', 'No media files found in source gallery');
-        return false;
-      }
-
-      // Check target gallery directory
-      let existingFiles = [];
-      try {
-        await fs.access(targetGalleryDir);
-        existingFiles = await fs.readdir(targetGalleryDir);
-      } catch (error) {
-        // Create target directories if they don't exist
-        await fs.mkdir(targetProjectDir, { recursive: true });
-        await fs.mkdir(targetGalleryDir, { recursive: true });
-      }
-
-      // Count how many files still need processing
-      const processedFileCount = existingFiles.length;
-      const remainingFileCount = mediaFiles.length - processedFileCount;
-      
-      if (remainingFileCount > 0) {
-        await logger.logDirectoryMatch(sourceGalleryDir, targetGalleryDir, 'SUCCESS', 
-          `Found ${mediaFiles.length} total media files, ${remainingFileCount} still need processing`);
-        return true;
-      } else {
-        await logger.logDirectoryMatch(sourceGalleryDir, targetGalleryDir, 'SKIPPED', 
-          `All ${mediaFiles.length} files already processed`);
-        return false;
-      }
-
-    } catch (error) {
-      await logger.logDirectoryMatch(sourceGalleryDir, '', 'FAILED', 'Source gallery directory not found');
-      return false;
-    }
-
-  } catch (error) {
-    await logger.logDirectoryMatch(projectDir, targetProjectDir, 'FAILED', `Error: ${error.message}`);
-    return false;
-  }
 }
 
 // Add a cleanup function at the start of main()
@@ -683,6 +1184,46 @@ function askUserConfirmation(question) {
 // Update the main function
 async function main() {
   try {
+    console.log('Verifying system requirements...');
+    const systemChecks = await verifySystemRequirements();
+    
+    // Log system check results
+    console.log('\nSystem Requirements Check:');
+    for (const check of systemChecks) {
+      console.log(`${check.name}: ${check.status}${check.version ? ` (${check.version})` : ''}`);
+      if (check.features) {
+        console.log('  Features:', JSON.stringify(check.features, null, 2));
+      }
+      if (check.note) {
+        console.log(`  Note: ${check.note}`);
+      }
+      if (check.error) {
+        console.log(`  Error: ${check.error}`);
+      }
+    }
+
+    // Check for critical errors
+    const criticalErrors = systemChecks.filter(check => check.status === 'ERROR');
+    if (criticalErrors.length > 0) {
+      console.error('\nCritical system requirements not met:');
+      criticalErrors.forEach(error => {
+        console.error(`- ${error.name}: ${error.error}`);
+        if (error.name === 'Sharp') {
+          console.error('\nTo fix Sharp installation:');
+          console.error('1. Ensure libvips is installed: brew install vips');
+          console.error('2. Reinstall Sharp: npm rebuild sharp');
+          console.error('3. If issues persist, try: npm install sharp@latest');
+        }
+        if (error.name === 'Sharp HEIF Support') {
+          console.error('\nTo fix HEIF support:');
+          console.error('1. Ensure libheif is installed: brew install libheif');
+          console.error('2. Reinstall Sharp: npm rebuild sharp');
+        }
+      });
+      console.error('\nPlease install missing dependencies before proceeding.');
+      process.exit(1);
+    }
+
     // Clear the directory errors at the start
     await fs.writeFile(logger.dirErrorsPath, '');
 
@@ -703,7 +1244,7 @@ async function main() {
     await logger.writeDirectoryErrors();
 
     console.log(`\nVerification complete. ${verifiedDirs.length} of ${projectDirs.length} directories ready for processing.`);
-    
+     
     if (shouldProcess) {
       const proceed = await askUserConfirmation(
         'This will process all verified directories. Are you sure you want to proceed? (y/N): '
@@ -748,4 +1289,4 @@ async function main() {
 // Run the script
 if (require.main === module) {
   main().catch(console.error);
-} 
+}
