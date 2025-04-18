@@ -10,7 +10,8 @@ axios.defaults.headers.common['Authorization'] = STRAPI_API_TOKEN ? `Bearer ${ST
 // Configuration
 const API_URL = 'http://localhost:1337/api/projects/project-list';
 const STRAPI_URL = 'http://localhost:1337';
-const UPLOADS_DIR = path.join(__dirname, '../jackie-summel/public/uploads');
+const PROJECT_FOLDERS_DIR = path.join(__dirname, '../jackie-summel/public/uploads/project_folders');
+const UPLOADS_DIR = PROJECT_FOLDERS_DIR;  // Now points to the project_folders directory
 const DB_PATH = path.join(__dirname, '../jackie-summel/data/data.db');
 
 // Helper function to check if Strapi is accessible
@@ -55,6 +56,16 @@ async function getProjectsFromAPI() {
 
 async function createLocalFolders(projects) {
   console.log('Creating local folders...');
+  
+  // Ensure the project_folders directory exists
+  try {
+    await fs.mkdir(PROJECT_FOLDERS_DIR, { recursive: true });
+    console.log(`Created parent directory: ${PROJECT_FOLDERS_DIR}`);
+  } catch (error) {
+    console.error(`Error creating parent directory: ${error.message}`);
+    throw error;
+  }
+
   for (const projectName of projects) {
     const projectDir = path.join(UPLOADS_DIR, projectName);
     const collageDir = path.join(projectDir, `${projectName}_collage`);
