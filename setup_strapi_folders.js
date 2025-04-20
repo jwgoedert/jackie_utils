@@ -196,6 +196,11 @@ async function updateDatabase(projects) {
 
     // Track folder order for parent-child relationships
     let folderOrder = 1;
+    
+    // Get the initial next available ID for the link table
+    const maxLinkIdResult = await db.get('SELECT MAX(id) as maxId FROM upload_folders_parent_lnk');
+    let nextLinkId = (maxLinkIdResult.maxId || 0) + 1;
+    console.log(`Starting with link ID: ${nextLinkId}`);
 
     for (const projectName of projects) {
       try {
@@ -244,16 +249,13 @@ async function updateDatabase(projects) {
           );
           console.log(`Created main project folder: ${projectName}`);
 
-          // Get the next available ID for the link table
-          const maxLinkIdResult = await db.get('SELECT MAX(id) as maxId FROM upload_folders_parent_lnk');
-          const nextLinkId = (maxLinkIdResult.maxId || 0) + 1;
-
           // Link project folder to parent "project_folders" directory
           await db.run(
             'INSERT INTO upload_folders_parent_lnk (id, folder_id, inv_folder_id, folder_ord) VALUES (?, ?, ?, ?)',
             [nextLinkId, nextId, parentFolderId, folderOrder++]
           );
-          console.log(`Linked project folder to parent directory: ${projectName}`);
+          console.log(`Linked project folder to parent directory: ${projectName} with link ID: ${nextLinkId}`);
+          nextLinkId++; // Increment the link ID for the next use
 
           // Create collage folder
           const collageFolderId = nextId + 1;
@@ -319,20 +321,21 @@ async function updateDatabase(projects) {
           );
           console.log(`Created gallery folder: ${projectName}_gallery`);
 
-          // Get the next available IDs for the link table
-          const nextCollageLinkId = nextLinkId + 1;
-          const nextGalleryLinkId = nextLinkId + 2;
+          // Link collage folder to project folder
+          await db.run(
+            'INSERT INTO upload_folders_parent_lnk (id, folder_id, inv_folder_id, folder_ord) VALUES (?, ?, ?, ?)',
+            [nextLinkId, collageFolderId, nextId, 1]
+          );
+          console.log(`Linked collage folder to project folder with link ID: ${nextLinkId}`);
+          nextLinkId++; // Increment the link ID for the next use
 
-          // Link collage and gallery folders to project folder with folder_ord
+          // Link gallery folder to project folder
           await db.run(
             'INSERT INTO upload_folders_parent_lnk (id, folder_id, inv_folder_id, folder_ord) VALUES (?, ?, ?, ?)',
-            [nextCollageLinkId, collageFolderId, nextId, 1]
+            [nextLinkId, galleryFolderId, nextId, 2]
           );
-          await db.run(
-            'INSERT INTO upload_folders_parent_lnk (id, folder_id, inv_folder_id, folder_ord) VALUES (?, ?, ?, ?)',
-            [nextGalleryLinkId, galleryFolderId, nextId, 2]
-          );
-          console.log(`Linked collage and gallery folders to project folder: ${projectName}`);
+          console.log(`Linked gallery folder to project folder with link ID: ${nextLinkId}`);
+          nextLinkId++; // Increment the link ID for the next use
         }
       } catch (error) {
         console.error(`Error processing project ${projectName}:`, error);
