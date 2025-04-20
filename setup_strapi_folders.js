@@ -1,18 +1,22 @@
 const STRAPI_API_TOKEN = process.env.STRAPI_API_TOKEN || ''; // Get from environment variable or set directly
-const fs = require('fs').promises;
+const fs = require('fs');  // Regular fs for sync operations
+const fsPromises = require('fs').promises;  // Promises version for async operations
 const path = require('path');
 const axios = require('axios');
-const sqlite3 = require('sqlite3').verbose();
+const sqlite3 = require('sqlite3');
 const { open } = require('sqlite');
+const { v4: uuidv4 } = require('uuid');
+const { execSync } = require('child_process');
 
 axios.defaults.headers.common['Authorization'] = STRAPI_API_TOKEN ? `Bearer ${STRAPI_API_TOKEN}` : '';
 
 // Configuration
+const STRAPI_BASE_URL = 'http://localhost:1337';
 const API_URL = 'http://localhost:1337/api/projects/project-list';
 const STRAPI_URL = 'http://localhost:1337';
-const PROJECT_FOLDERS_DIR = path.join(__dirname, '../jackie-summel/public/uploads/project_folders');
+const DB_PATH = '/Users/jwgoedert_t2studio/work_hub/jackie_sumell/jackie_sumell_web/jackie-summel/data/data.db';
+const PROJECT_FOLDERS_DIR = path.join(process.cwd(), 'jackie-summel', 'public', 'uploads', 'project_folders');
 const UPLOADS_DIR = PROJECT_FOLDERS_DIR;  // Now points to the project_folders directory
-const DB_PATH = path.join(__dirname, '../jackie-summel/data/data.db');
 
 // Helper function to check if Strapi is accessible
 async function checkStrapiConnection() {
@@ -59,7 +63,7 @@ async function createLocalFolders(projects) {
   
   // Ensure the project_folders directory exists
   try {
-    await fs.mkdir(PROJECT_FOLDERS_DIR, { recursive: true });
+    await fsPromises.mkdir(PROJECT_FOLDERS_DIR, { recursive: true });
     console.log(`Created parent directory: ${PROJECT_FOLDERS_DIR}`);
   } catch (error) {
     console.error(`Error creating parent directory: ${error.message}`);
@@ -71,21 +75,36 @@ async function createLocalFolders(projects) {
     const collageDir = path.join(projectDir, `${projectName}_collage`);
     const galleryDir = path.join(projectDir, `${projectName}_gallery`);
 
-    await fs.mkdir(projectDir, { recursive: true });
-    await fs.mkdir(collageDir, { recursive: true });
-    await fs.mkdir(galleryDir, { recursive: true });
+    await fsPromises.mkdir(projectDir, { recursive: true });
+    await fsPromises.mkdir(collageDir, { recursive: true });
+    await fsPromises.mkdir(galleryDir, { recursive: true });
   }
   console.log('Local folders created successfully');
 }
 
 async function verifyDatabase() {
-  console.log('Verifying database...');
   try {
-    // Check if database file exists
-    await fs.access(DB_PATH);
-    console.log('Database file exists at:', DB_PATH);
-    
-    // Try to open the database
+    // Check if file exists and is readable
+    if (!fs.existsSync(DB_PATH)) {
+      throw new Error(`Database file not found at ${DB_PATH}`);
+    }
+
+    // Check if file is writable
+    try {
+      fs.accessSync(DB_PATH, fs.constants.R_OK | fs.constants.W_OK);
+    } catch (err) {
+      console.error('Warning: Database file is not writable. Attempting to fix permissions...');
+      try {
+        fs.chmodSync(DB_PATH, 0o666);
+        console.log('Successfully updated database file permissions');
+      } catch (chmodErr) {
+        console.error('Failed to update permissions:', chmodErr.message);
+        console.error('Please run the script with appropriate permissions or manually update file permissions');
+        process.exit(1);
+      }
+    }
+
+    // Open database with write permissions
     const db = await open({
       filename: DB_PATH,
       driver: sqlite3.Database
@@ -93,7 +112,7 @@ async function verifyDatabase() {
     
     // Check if required tables exist
     const tables = await db.all("SELECT name FROM sqlite_master WHERE type='table'");
-    const requiredTables = ['upload_folders', 'projects'];
+    const requiredTables = ['upload_folders', 'upload_folders_parent_lnk', 'projects'];
     const missingTables = requiredTables.filter(table => 
       !tables.some(t => t.name === table)
     );
@@ -106,281 +125,218 @@ async function verifyDatabase() {
     const folderColumns = await db.all("PRAGMA table_info(upload_folders)");
     console.log('Upload folders table columns:', folderColumns.map(col => col.name).join(', '));
     
+    const linkColumns = await db.all("PRAGMA table_info(upload_folders_parent_lnk)");
+    console.log('Upload folders parent link table columns:', linkColumns.map(col => col.name).join(', '));
+    
     await db.close();
     console.log('Database verification successful');
     return true;
   } catch (error) {
-    if (error.code === 'ENOENT') {
-      console.error('Database file not found at:', DB_PATH);
-      console.error('Please make sure Strapi is running and the database is initialized.');
-    } else {
-      console.error('Database verification failed:', error.message);
-    }
-    return false;
+    console.error('Database verification failed:', error.message);
+    process.exit(1);
   }
 }
 
 async function updateDatabase(projects) {
-  console.log('Updating database...');
   const db = await open({
     filename: DB_PATH,
     driver: sqlite3.Database
   });
 
   try {
-    // First inspect both tables' structures
-    const folderColumns = await db.all("PRAGMA table_info(upload_folders)");
-    const projectColumns = await db.all("PRAGMA table_info(projects)");
-    
-    console.log('\nUpload folders table structure:');
-    folderColumns.forEach(col => {
-      console.log(`  - ${col.name} (${col.type})${col.pk ? ' PRIMARY KEY' : ''}${col.notnull ? ' NOT NULL' : ''}`);
-    });
-
-    console.log('\nProjects table structure:');
-    projectColumns.forEach(col => {
-      console.log(`  - ${col.name} (${col.type})${col.pk ? ' PRIMARY KEY' : ''}${col.notnull ? ' NOT NULL' : ''}`);
-    });
-
-    // Begin transaction
+    // Start transaction
     await db.run('BEGIN TRANSACTION');
 
+    // Create parent "project_folders" directory in the database
+    const parentFolderName = "project_folders";
+    const parentFolderPath = "/1"; // Root path with ID 1
+    
+    // Check if parent folder already exists
+    const existingParentFolder = await db.get('SELECT id FROM upload_folders WHERE path = ?', [parentFolderPath]);
+    
+    let parentFolderId;
+    if (existingParentFolder) {
+      console.log(`Parent folder already exists with ID: ${existingParentFolder.id}`);
+      parentFolderId = existingParentFolder.id;
+    } else {
+      // Get the next available ID and path_id
+      const maxIdResult = await db.get('SELECT MAX(id) as maxId FROM upload_folders');
+      const nextId = (maxIdResult.maxId || 0) + 1;
+      
+      const maxPathIdResult = await db.get('SELECT MAX(path_id) as maxPathId FROM upload_folders');
+      const nextPathId = (maxPathIdResult.maxPathId || 0) + 1;
+      
+      // Generate a UUID for document_id
+      const documentId = uuidv4().replace(/-/g, '');
+
+      // Create parent folder
+      await db.run(`
+        INSERT INTO upload_folders (
+          id,
+          document_id,
+          name, 
+          path_id,
+          path,
+          created_at, 
+          updated_at,
+          published_at,
+          created_by_id,
+          updated_by_id,
+          locale
+        )
+        VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'), datetime('now'), ?, ?, 'en')
+      `, [nextId, documentId, parentFolderName, nextPathId, parentFolderPath, 1, 1]);
+      parentFolderId = nextId;
+      console.log(`Created parent folder with ID: ${parentFolderId}`);
+    }
+
+    // Get the next available path_id
+    const { maxPathId } = await db.get('SELECT MAX(path_id) as maxPathId FROM upload_folders');
+    let nextPathId = (maxPathId || 0) + 1;
+
+    // Track folder order for parent-child relationships
+    let folderOrder = 1;
+
     for (const projectName of projects) {
-      console.log(`Processing project: ${projectName}`);
-      
-      // Check if main project folder already exists
-      const existingMainFolder = await db.get('SELECT id FROM upload_folders WHERE path = ?', [projectName]);
-      
-      let projectFolderId;
-      if (existingMainFolder) {
-        console.log(`  Main folder already exists with ID: ${existingMainFolder.id}`);
-        projectFolderId = existingMainFolder.id;
-      } else {
+      try {
+        // Get the next available ID
+        const maxIdResult = await db.get('SELECT MAX(id) as maxId FROM upload_folders');
+        const nextId = (maxIdResult.maxId || 0) + 1;
+        
+        // Generate a UUID for document_id
+        const documentId = uuidv4().replace(/-/g, '');
+        
         // Create main project folder
-        const result = await db.run(`
-          INSERT INTO upload_folders (
-            name, 
-            path, 
-            path_id,
-            created_at, 
-            updated_at,
-            published_at,
-            locale
-          )
-          VALUES (?, ?, ?, datetime('now'), datetime('now'), datetime('now'), 'en')
-        `, [projectName, projectName, null]);
-        projectFolderId = result.lastID;
-        console.log(`  Created main folder with ID: ${projectFolderId}`);
-      }
+        const projectPath = `/1/${nextId}`;
+        const projectPathId = nextPathId++;
 
-      // Check if collage folder already exists
-      const collagePath = `${projectName}/${projectName}_collage`;
-      const existingCollageFolder = await db.get('SELECT id FROM upload_folders WHERE path = ?', [collagePath]);
-      
-      let collageFolderId;
-      if (existingCollageFolder) {
-        console.log(`  Collage folder already exists with ID: ${existingCollageFolder.id}`);
-        collageFolderId = existingCollageFolder.id;
-      } else {
-        // Get the next available path_id
-        const { maxPathId } = await db.get('SELECT MAX(path_id) as maxPathId FROM upload_folders');
-        const nextPathId = (maxPathId || 0) + 1;
-        
-        // Create collage subfolder
-        const result = await db.run(`
-          INSERT INTO upload_folders (
-            name, 
-            path, 
-            path_id,
-            created_at, 
-            updated_at,
-            published_at,
-            locale
-          )
-          VALUES (?, ?, ?, datetime('now'), datetime('now'), datetime('now'), 'en')
-        `, [`${projectName}_collage`, collagePath, nextPathId]);
-        collageFolderId = result.lastID;
-        console.log(`  Created collage folder with ID: ${collageFolderId}`);
-      }
-
-      // Check if gallery folder already exists
-      const galleryPath = `${projectName}/${projectName}_gallery`;
-      const existingGalleryFolder = await db.get('SELECT id FROM upload_folders WHERE path = ?', [galleryPath]);
-      
-      let galleryFolderId;
-      if (existingGalleryFolder) {
-        console.log(`  Gallery folder already exists with ID: ${existingGalleryFolder.id}`);
-        galleryFolderId = existingGalleryFolder.id;
-      } else {
-        // Get the next available path_id
-        const { maxPathId } = await db.get('SELECT MAX(path_id) as maxPathId FROM upload_folders');
-        const nextPathId = (maxPathId || 0) + 1;
-        
-        // Create gallery subfolder
-        const result = await db.run(`
-          INSERT INTO upload_folders (
-            name, 
-            path, 
-            path_id,
-            created_at, 
-            updated_at,
-            published_at,
-            locale
-          )
-          VALUES (?, ?, ?, datetime('now'), datetime('now'), datetime('now'), 'en')
-        `, [`${projectName}_gallery`, galleryPath, nextPathId]);
-        galleryFolderId = result.lastID;
-        console.log(`  Created gallery folder with ID: ${galleryFolderId}`);
-      }
-
-      // Check if folder relationships already exist
-      const existingCollageLink = await db.get(
-        'SELECT id FROM upload_folders_parent_lnk WHERE folder_id = ? AND inv_folder_id = ?', 
-        [collageFolderId, projectFolderId]
-      );
-      
-      if (!existingCollageLink) {
-        // Link collage folder to main folder
-        await db.run(`
-          INSERT INTO upload_folders_parent_lnk (folder_id, inv_folder_id, folder_ord)
-          VALUES (?, ?, ?)
-        `, [collageFolderId, projectFolderId, 0]);
-        console.log(`  Created link between collage folder and main folder`);
-      }
-
-      const existingGalleryLink = await db.get(
-        'SELECT id FROM upload_folders_parent_lnk WHERE folder_id = ? AND inv_folder_id = ?', 
-        [galleryFolderId, projectFolderId]
-      );
-      
-      if (!existingGalleryLink) {
-        // Link gallery folder to main folder
-        await db.run(`
-          INSERT INTO upload_folders_parent_lnk (folder_id, inv_folder_id, folder_ord)
-          VALUES (?, ?, ?)
-        `, [galleryFolderId, projectFolderId, 1]);
-        console.log(`  Created link between gallery folder and main folder`);
-      }
-
-      // Find the project in the database
-      const projectNameWithoutYear = projectName.split(' ').slice(1).join(' ');
-      const project = await db.get('SELECT id FROM projects WHERE name = ?', [projectNameWithoutYear]);
-      
-      if (project) {
-        console.log(`  Found project with ID: ${project.id}`);
-        
-        // Check if files already exist
-        const existingCollageFile = await db.get(
-          'SELECT id FROM files WHERE folder_path = ?', 
-          [collagePath]
+        // Check if main project folder already exists
+        const existingProjectFolder = await db.get(
+          'SELECT id FROM upload_folders WHERE name = ?',
+          [projectName]
         );
-        
-        let collageFileId;
-        if (existingCollageFile) {
-          console.log(`  Collage file already exists with ID: ${existingCollageFile.id}`);
-          collageFileId = existingCollageFile.id;
-        } else {
-          // Create placeholder file for collage folder
-          const result = await db.run(`
-            INSERT INTO files (
+
+        if (!existingProjectFolder) {
+          // Create main project folder
+          await db.run(
+            `INSERT INTO upload_folders (
+              id,
+              document_id,
               name, 
-              folder_path,
+              path_id,
+              path,
               created_at, 
               updated_at,
               published_at,
+              created_by_id, 
+              updated_by_id,
               locale
-            )
-            VALUES (?, ?, datetime('now'), datetime('now'), datetime('now'), 'en')
-          `, [`${projectName}_collage_placeholder`, collagePath]);
-          collageFileId = result.lastID;
-          console.log(`  Created collage file with ID: ${collageFileId}`);
-        }
-        
-        const existingGalleryFile = await db.get(
-          'SELECT id FROM files WHERE folder_path = ?', 
-          [galleryPath]
-        );
-        
-        let galleryFileId;
-        if (existingGalleryFile) {
-          console.log(`  Gallery file already exists with ID: ${existingGalleryFile.id}`);
-          galleryFileId = existingGalleryFile.id;
-        } else {
-          // Create placeholder file for gallery folder
-          const result = await db.run(`
-            INSERT INTO files (
+            ) VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'), datetime('now'), ?, ?, 'en')`,
+            [
+              nextId,
+              documentId,
+              projectName,
+              projectPathId,
+              projectPath,
+              1,
+              1
+            ]
+          );
+          console.log(`Created main project folder: ${projectName}`);
+
+          // Get the next available ID for the link table
+          const maxLinkIdResult = await db.get('SELECT MAX(id) as maxId FROM upload_folders_parent_lnk');
+          const nextLinkId = (maxLinkIdResult.maxId || 0) + 1;
+
+          // Link project folder to parent "project_folders" directory
+          await db.run(
+            'INSERT INTO upload_folders_parent_lnk (id, folder_id, inv_folder_id, folder_ord) VALUES (?, ?, ?, ?)',
+            [nextLinkId, nextId, parentFolderId, folderOrder++]
+          );
+          console.log(`Linked project folder to parent directory: ${projectName}`);
+
+          // Create collage folder
+          const collageFolderId = nextId + 1;
+          const collageDocumentId = uuidv4().replace(/-/g, '');
+          const collagePath = `/1/${nextId}/${collageFolderId}`;
+          const collagePathId = nextPathId++;
+
+          await db.run(
+            `INSERT INTO upload_folders (
+              id,
+              document_id,
               name, 
-              folder_path,
+              path_id,
+              path,
               created_at, 
               updated_at,
               published_at,
+              created_by_id, 
+              updated_by_id,
               locale
-            )
-            VALUES (?, ?, datetime('now'), datetime('now'), datetime('now'), 'en')
-          `, [`${projectName}_gallery_placeholder`, galleryPath]);
-          galleryFileId = result.lastID;
-          console.log(`  Created gallery file with ID: ${galleryFileId}`);
-        }
+            ) VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'), datetime('now'), ?, ?, 'en')`,
+            [
+              collageFolderId,
+              collageDocumentId,
+              `${projectName}_collage`,
+              collagePathId,
+              collagePath,
+              1,
+              1
+            ]
+          );
+          console.log(`Created collage folder: ${projectName}_collage`);
 
-        // Check if file-folder links already exist
-        const existingCollageFileLink = await db.get(
-          'SELECT id FROM files_folder_lnk WHERE file_id = ? AND folder_id = ?', 
-          [collageFileId, collageFolderId]
-        );
-        
-        if (!existingCollageFileLink) {
-          // Link collage file to collage folder
-          await db.run(`
-            INSERT INTO files_folder_lnk (file_id, folder_id, file_ord)
-            VALUES (?, ?, ?)
-          `, [collageFileId, collageFolderId, 0]);
-          console.log(`  Created link between collage file and collage folder`);
-        }
-        
-        const existingGalleryFileLink = await db.get(
-          'SELECT id FROM files_folder_lnk WHERE file_id = ? AND folder_id = ?', 
-          [galleryFileId, galleryFolderId]
-        );
-        
-        if (!existingGalleryFileLink) {
-          // Link gallery file to gallery folder
-          await db.run(`
-            INSERT INTO files_folder_lnk (file_id, folder_id, file_ord)
-            VALUES (?, ?, ?)
-          `, [galleryFileId, galleryFolderId, 0]);
-          console.log(`  Created link between gallery file and gallery folder`);
-        }
+          // Create gallery folder
+          const galleryFolderId = nextId + 2;
+          const galleryDocumentId = uuidv4().replace(/-/g, '');
+          const galleryPath = `/1/${nextId}/${galleryFolderId}`;
+          const galleryPathId = nextPathId++;
 
-        // Check if project-file links already exist
-        const existingCollageProjectLink = await db.get(
-          'SELECT id FROM files_related_mph WHERE file_id = ? AND related_id = ? AND field = ?', 
-          [collageFileId, project.id, 'vineImages']
-        );
-        
-        if (!existingCollageProjectLink) {
-          // Link collage file to project
-          await db.run(`
-            INSERT INTO files_related_mph (file_id, related_id, related_type, field, "order")
-            VALUES (?, ?, ?, ?, ?)
-          `, [collageFileId, project.id, 'api::project.project', 'vineImages', 0]);
-          console.log(`  Created link between collage file and project`);
+          await db.run(
+            `INSERT INTO upload_folders (
+              id,
+              document_id,
+              name, 
+              path_id,
+              path,
+              created_at, 
+              updated_at,
+              published_at,
+              created_by_id, 
+              updated_by_id,
+              locale
+            ) VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'), datetime('now'), ?, ?, 'en')`,
+            [
+              galleryFolderId,
+              galleryDocumentId,
+              `${projectName}_gallery`,
+              galleryPathId,
+              galleryPath,
+              1,
+              1
+            ]
+          );
+          console.log(`Created gallery folder: ${projectName}_gallery`);
+
+          // Get the next available IDs for the link table
+          const nextCollageLinkId = nextLinkId + 1;
+          const nextGalleryLinkId = nextLinkId + 2;
+
+          // Link collage and gallery folders to project folder with folder_ord
+          await db.run(
+            'INSERT INTO upload_folders_parent_lnk (id, folder_id, inv_folder_id, folder_ord) VALUES (?, ?, ?, ?)',
+            [nextCollageLinkId, collageFolderId, nextId, 1]
+          );
+          await db.run(
+            'INSERT INTO upload_folders_parent_lnk (id, folder_id, inv_folder_id, folder_ord) VALUES (?, ?, ?, ?)',
+            [nextGalleryLinkId, galleryFolderId, nextId, 2]
+          );
+          console.log(`Linked collage and gallery folders to project folder: ${projectName}`);
         }
-        
-        const existingGalleryProjectLink = await db.get(
-          'SELECT id FROM files_related_mph WHERE file_id = ? AND related_id = ? AND field = ?', 
-          [galleryFileId, project.id, 'galleryImages']
-        );
-        
-        if (!existingGalleryProjectLink) {
-          // Link gallery file to project
-          await db.run(`
-            INSERT INTO files_related_mph (file_id, related_id, related_type, field, "order")
-            VALUES (?, ?, ?, ?, ?)
-          `, [galleryFileId, project.id, 'api::project.project', 'galleryImages', 0]);
-          console.log(`  Created link between gallery file and project`);
-        }
-      } else {
-        console.log(`  Warning: Project "${projectNameWithoutYear}" not found in database`);
+      } catch (error) {
+        console.error(`Error processing project ${projectName}:`, error);
+        throw error;
       }
     }
 

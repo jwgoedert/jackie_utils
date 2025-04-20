@@ -2,7 +2,7 @@ import os
 import requests
 
 # Toggle dry run mode
-DRY_RUN = False  # Set to False to actually upload and link files
+DRY_RUN = True  # Set to False to actually upload and link files
 from pathlib import Path
 from mimetypes import guess_type
 
@@ -33,11 +33,12 @@ def log(message):
 # === MAIN SCRIPT ===
 def fetch_projects():
     all_projects = []
+    seen_ids = set()  # Keep track of project IDs we've already seen
     page = 1
     page_size = 100  # Strapi's default page size
     
     while True:
-        url = f"{STRAPI_BASE_URL}/api/projects?pagination[page]={page}&pagination[pageSize]={page_size}"
+        url = f"{STRAPI_BASE_URL}/api/projects?pagination[page]={page}&pagination[pageSize]={page_size}&sort=Date:asc"
         log(f"[DEBUG] Fetching page {page} with page size {page_size}")
         
         response = requests.get(url, headers=HEADERS)
@@ -49,9 +50,33 @@ def fetch_projects():
             log(f"[ERROR] Unexpected API response structure: {list(data.keys())}")
             break
             
-        # Get projects from this page
+        # Get projects from this page, filtering out duplicates
         page_projects = data["data"]
-        all_projects.extend(page_projects)
+        
+        # Log the first project's structure on first page
+        if page == 1 and page_projects:
+            log(f"[DEBUG] Example project data structure:")
+            log(f"Keys in project: {list(page_projects[0].keys())}")
+            log(f"Project ID: {page_projects[0].get('id')}")
+            log(f"Project Name: {page_projects[0].get('Name')}")
+            log(f"Project Date: {page_projects[0].get('Date')}")
+        
+        # Filter and validate projects
+        valid_projects = []
+        for proj in page_projects:
+            if proj['id'] in seen_ids:
+                log(f"[DEBUG] Skipping duplicate project ID: {proj['id']} - {proj.get('Name', 'Unknown')} ({proj.get('Date', 'Unknown')})")
+                continue
+                
+            # Validate this is a proper project
+            if not all(key in proj for key in ['id', 'Name', 'Date']):
+                log(f"[WARN] Skipping invalid project data: {proj}")
+                continue
+                
+            seen_ids.add(proj['id'])
+            valid_projects.append(proj)
+            
+        all_projects.extend(valid_projects)
         
         # Check pagination metadata
         if "meta" in data and "pagination" in data["meta"]:
@@ -59,7 +84,10 @@ def fetch_projects():
             total_pages = pagination.get("pageCount", 0)
             total_items = pagination.get("total", 0)
             
-            log(f"[DEBUG] Page {page}/{total_pages}: Retrieved {len(page_projects)} projects (Total: {total_items})")
+            log(f"[DEBUG] Page {page}/{total_pages}: Retrieved {len(valid_projects)} new valid projects (Total unique so far: {len(all_projects)})")
+            
+            # Log pagination details
+            log(f"[DEBUG] Pagination info - Page: {pagination.get('page')}, PageSize: {pagination.get('pageSize')}, Total: {total_items}")
             
             # If we've reached the last page, break
             if page >= total_pages:
@@ -71,7 +99,18 @@ def fetch_projects():
             log(f"[DEBUG] No pagination metadata found, assuming single page")
             break
     
-    log(f"[INFO] Retrieved a total of {len(all_projects)} projects")
+    # Log summary of unique projects by year
+    projects_by_year = {}
+    for proj in all_projects:
+        year = proj.get('Date')
+        if year:
+            projects_by_year[year] = projects_by_year.get(year, 0) + 1
+    
+    log(f"[INFO] Projects by year:")
+    for year in sorted(projects_by_year.keys()):
+        log(f"  {year}: {projects_by_year[year]} projects")
+    
+    log(f"[INFO] Retrieved a total of {len(all_projects)} unique projects")
     return all_projects
 
 def upload_file(file_path):
@@ -117,10 +156,17 @@ def main():
         log(f"[ERROR] Failed to fetch projects: {str(e)}")
         return
 
+    # Keep track of processed projects to avoid duplicates
+    processed_ids = set()
     unmatched = []
 
     for project in projects:
         try:
+            # Skip if we've already processed this project
+            if project['id'] in processed_ids:
+                continue
+            processed_ids.add(project['id'])
+            
             # Debug the structure of the first project
             if project == projects[0]:
                 log(f"[DEBUG] First project keys: {project.keys()}")
