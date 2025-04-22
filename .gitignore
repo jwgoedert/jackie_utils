@@ -87,3 +87,17 @@ temp/
 
 # Project specific
 directory_creation_log_*.txt
+
+# Ignore image files
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.webp
+*.tiff
+*.mov
+*.mp4
+*.avi
+*.webm
+*.gif
+*.jpg
