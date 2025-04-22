@@ -1,0 +1,277 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# Utility Scripts Guidelines
+
+## Script Categories
+
+### Database Management
+- `cleanup_folders.sql`: Database cleanup and maintenance
+- `create_directories.js`: Folder structure creation
+- `upload_collages.js`: Media upload automation
+- `migration.js`: Data migration utilities
+
+## Database Operations
+
+### SQLite Best Practices
+- Always use transactions for multiple operations
+- Handle errors with rollbacks
+- Use prepared statements
+- Verify database connection before operations
+
+### Timestamp Handling
+```javascript
+// Convert any timestamp to Unix format
+function ensureUnixTimestamp(timestamp) {
+    if (!timestamp) return Date.now();
+    if (!isNaN(timestamp) && timestamp > 1000000000000) return timestamp;
+    return new Date(timestamp).getTime();
+}
+```
+
+## File Management
+
+### Directory Structure
+```
+project_folders/
+├── YYYY Project Name/
+│   ├── YYYY Project Name_collage/
+│   └── YYYY Project Name_gallery/
+└── ...
+```
+
+### Path Handling
+- Use `path.join()` for cross-platform compatibility
+- Always verify directory existence before operations
+- Create directories recursively when needed
+
+## Error Handling
+
+### Database Errors
+- Log detailed error messages
+- Implement proper rollbacks
+- Handle constraint violations
+- Track missing or invalid records
+
+### File System Errors
+- Handle missing files/directories
+- Check permissions before operations
+- Implement retry mechanisms
+- Log failed operations
+
+## Logging
+
+### Log Files
+- Use timestamp in log filenames
+- Include operation summaries
+- Log both successes and failures
+- Maintain separate logs for different operations
+
+### Log Format
+```javascript
+{
+    timestamp: Date.now(),
+    operation: 'string',
+    status: 'success|error',
+    details: {},
+    error?: Error
+}
+```
+
+## Script Configuration
+
+### Environment Variables
+- `STRAPI_API_TOKEN`: API authentication
+- `DB_PATH`: Database location
+- `OUTPUT_DIR`: Output directory for files
+
+### Constants
+- Define at top of file
+- Use descriptive names
+- Document expected values
+- Group related constants
+
+## Best Practices
+
+1. Code Organization
+   - Modular function design
+   - Clear error handling
+   - Consistent naming conventions
+   - Comprehensive logging
+
+2. Database Operations
+   - Use transactions
+   - Handle concurrent access
+   - Validate data before insert/update
+   - Clean up temporary tables
+
+3. File Operations
+   - Check permissions
+   - Handle path separators
+   - Validate file names
+   - Clean up temporary files
+
+## Common Pitfalls
+
+1. Database Access
+   - Not closing connections
+   - Missing error handling
+   - Incomplete transactions
+   - Race conditions
+
+2. File System
+   - Path separator issues
+   - Permission problems
+   - Resource leaks
+   - Incomplete cleanup
+
+3. Error Handling
+   - Silent failures
+   - Incomplete rollbacks
+   - Missing logging
+   - Unclear error messages
+
+## Testing
+
+### Manual Testing
+- Test with sample data
+- Verify database state
+- Check file system changes
+- Validate log output
+
+### Error Scenarios
+- Test with invalid input
+- Check error handling
+- Verify rollbacks
+- Test cleanup procedures 
+
+### DB Schema
+
+# 🗃️ Strapi Database Schema Reference
+
+> **Strapi Version**: v5.7.0  
+> **Node Version**: v23.3.0  
+> **DB**: SQLite (default)
+
+---
+
+## 📌 Key Tables
+
+### ✅ **Core Media Tables**
+
+- **`files`**
+  - Stores metadata for all uploaded media files.
+  - **Columns**: `id`, `document_id`, `name`, `alternative_text`, `caption`, `width`, `height`, `formats`, `hash`, `ext`, `mime`, `size`, `url`, `preview_url`, `provider`, `provider_metadata`, `folder_path`, `created_at`, `updated_at`, `published_at`, `created_by_id`, `updated_by_id`, `locale`.
+
+- **`upload_folders`**
+  - Stores folder structure for Media Library.
+  - **Columns**: `id`, `document_id`, `name`, `path_id`, `path`, `created_at`, `updated_at`, `published_at`, `created_by_id`, `updated_by_id`, `locale`.
+
+- **`files_folder_lnk`**
+  - Links files to folders.
+  - **Columns**: `id`, `file_id`, `folder_id`, `file_ord`.
+
+- **`upload_folders_parent_lnk`**
+  - Defines hierarchical relationships between folders.
+  - **Columns**: `id`, `folder_id`, `inv_folder_id`, `folder_ord`.
+
+### ✅ **Content Tables**
+
+- **`projects`**
+  - Main content entries.
+  - **Columns**: `id`, `document_id`, `name`, `date`, `parent_vine`, `hyperlinks`, `locations`, `venue_institute`, `description`, `collaborators`, `created_at`, `updated_at`, `published_at`, `created_by_id`, `updated_by_id`, `locale`.
+
+- **`tags`**
+  - Tag entries.
+  - **Columns**: `id`, `document_id`, `name`, `created_at`, `updated_at`, `published_at`, `created_by_id`, `updated_by_id`, `locale`.
+
+- **`project_types`**
+  - Types of projects.
+  - **Columns**: `id`, `document_id`, `type`, `created_at`, `updated_at`, `published_at`, `created_by_id`, `updated_by_id`, `locale`.
+
+- **`projects_tags_lnk`**: Links `projects` to `tags`.
+  - **Columns**: `id`, `project_id`, `tag_id`, `tag_ord`.
+
+- **`projects_type_lnk`**: Links `projects` to `project_types`.
+  - **Columns**: `id`, `project_id`, `project_type_id`, `project_type_ord`.
+
+---
+
+## 🔑 **User & Permission Tables**
+
+- **`admin_users`**
+  - Admin accounts for Strapi.
+  - Columns: `id`, `document_id`, `firstname`, `lastname`, `username`, `email`, `password`, `reset_password_token`, `registration_token`, `is_active`, `blocked`, `prefered_language`, `created_at`, `updated_at`, `published_at`, `created_by_id`, `updated_by_id`, `locale`.
+
+- **`admin_roles`**
+  - Admin role definitions.
+  - Columns: `id`, `document_id`, `name`, `code`, `description`, `created_at`, `updated_at`, `published_at`, `created_by_id`, `updated_by_id`, `locale`.
+
+- **`admin_permissions`**
+  - Permissions associated with admin roles.
+  - Columns: `id`, `document_id`, `action`, `action_parameters`, `subject`, `properties`, `conditions`, `created_at`, `updated_at`, `published_at`, `created_by_id`, `updated_by_id`, `locale`.
+
+- Relations: `admin_users_roles_lnk`, `admin_permissions_role_lnk`.
+
+- **`up_users`**, **`up_roles`**, **`up_permissions`**
+  - For regular authenticated users (non-admins).
+
+- Relations: `up_permissions_role_lnk`, `up_users_role_lnk`.
+
+---
+
+## 📡 **API & Token Management**
+
+- **`strapi_api_tokens`**
+  - API tokens generated in Strapi.
+  - Columns: `id`, `document_id`, `name`, `description`, `type`, `access_key`, `last_used_at`, `expires_at`, `lifespan`, `created_at`, `updated_at`, `published_at`, `created_by_id`, `updated_by_id`, `locale`.
+
+- Relations: `strapi_api_token_permissions_token_lnk`.
+
+---
+
+## 🎯 **Typical Queries / Operations**
+
+**Query project data:**
+
+```sql
+SELECT * FROM projects WHERE name LIKE '%<project_name>%';
+```
+
+**Find associated tags for a project:**
+
+```sql
+SELECT tags.name FROM tags
+JOIN projects_tags_lnk ON tags.id = projects_tags_lnk.tag_id
+JOIN projects ON projects.id = projects_tags_lnk.project_id
+WHERE projects.name = '<project_name>';
+```
+
+**List files in a specific folder:**
+
+```sql
+SELECT files.* FROM files
+JOIN files_folder_lnk ON files.id = files_folder_lnk.file_id
+JOIN upload_folders ON files_folder_lnk.folder_id = upload_folders.id
+WHERE upload_folders.name = '<folder_name>';
+```
+
+---
+
+## 🗂️ **Folder Structure (`upload_folders`)**
+
+- Folders use a hierarchical structure (`path_id`, `path`).
+- `document_id` is a UUID.
+
+---
+
+## ✅ **Best Practices for Reference**
+
+- Save this file as `strapi_db_schema.md` in your project root or a dedicated documentation directory.
+- Cursor and similar assistants automatically reference markdown files in your workspace, enhancing context awareness and improving suggestions.
+
+
+
+

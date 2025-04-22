@@ -4,11 +4,21 @@
   "description": "Utility scripts for Jackie Sumell project files",
   "scripts": {
     "create-dirs": "node create_directories.js",
-    "setup-strapi-folders": "node setup_strapi_folders.js"
+    "setup-strapi-folders": "node setup_strapi_folders.js",
+    "upload-collages": "node upload_collages.js",
+    "process-images": "node process_images.js"
   },
   "dependencies": {
     "axios": "^1.6.7",
+    "csv-parser": "^3.0.0",
+    "csv-writer": "^1.6.0",
+    "fluent-ffmpeg": "^2.1.2",
+    "form-data": "^4.0.2",
+    "pdf-lib": "^1.17.1",
+    "pdf-poppler": "^0.2.1",
+    "sharp": "^0.33.2",
+    "sqlite": "^5.1.1",
     "sqlite3": "^5.1.7",
-    "sqlite": "^5.1.1"
+    "uuid": "^11.1.0"
   }
-} 
+}

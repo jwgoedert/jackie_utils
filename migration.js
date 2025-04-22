@@ -17,7 +17,7 @@ for (let i = 0; i < args.length; i++) {
 const API_URL = 'http://localhost:1337/api/projects/group-by-year';
 const COLLAGES_SOURCE = path.join(__dirname, '..', 'jackie_collage_integration', 'data', 'collages_flattened');
 const GALLERY_SOURCE = path.join(__dirname, '..', 'jackie_collage_integration', 'data', 'project_folders');
-let OUTPUT_DIR = path.join(__dirname, '..', 'jackie_collage_integration', 'project-folders');
+let OUTPUT_DIR = path.join(__dirname, '..', 'jackie_collage_integration', 'project-folders-test');
 
 // Utility functions
 async function ensureDirectoryExists(dirPath) {
