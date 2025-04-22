@@ -251,10 +251,25 @@ def main():
                 continue
 
             for media_file in media_files:
+
+                media_ids = []
+            for media_file in media_files:
                 try:
                     if DRY_RUN:
                         log(f"[DRY_RUN] Would upload {media_file} → {folder_name} ({media_field})")
                     else:
+                        uploaded = upload_file(media_file)
+                        media_ids.append(uploaded["id"])
+                        log(f"[UPLOADED] {media_file} → {folder_name} ({media_field})")
+                except Exception as e:
+                    log(f"[ERROR] {media_file} → {folder_name}: {str(e)}")
+
+            # Only update if media was uploaded
+            if media_ids:
+                update_project_media_bulk(project, media_ids, media_field, media_folder)
+
+                log(f"[DRY_RUN] Would upload {media_file} → {folder_name} ({media_field})")
+            else:
                         uploaded = upload_file(media_file)
                         update_project_media(
                             project["id"], 
@@ -264,7 +279,7 @@ def main():
                             media_file.name
                         )
                         log(f"[UPLOADED] {media_file} → {folder_name} ({media_field})")
-                except Exception as e:
+        except Exception as e:
                     log(f"[ERROR] {media_file} → {folder_name}: {str(e)}")
         except KeyError as e:
             log(f"[ERROR] Project data structure issue: Missing key {str(e)} in project")
@@ -273,3 +288,37 @@ def main():
             log(f"[DEBUG] Project info: {project_info}")
 if __name__ == "__main__":
     main()
+
+
+
+def update_project_media_bulk(project, media_ids, media_field, project_folder):
+    project_id = project["id"]
+    if project.get("publishedAt") is not None:
+        log(f"[SKIPPED] Project {project_id} is published; skipping upload.")
+        return
+
+    url = f"{STRAPI_BASE_URL}/api/projects/{project_id}"
+    update_data = {
+        "data": {
+            media_field: media_ids
+        }
+    }
+
+    if DRY_RUN:
+        log(f"[DRY_RUN] Would update project {project_id} with {media_field}: {media_ids}")
+        return {"data": {"id": project_id}}
+
+    try:
+        response = requests.put(
+            url,
+            headers={**HEADERS, "Content-Type": "application/json"},
+            json=update_data
+        )
+        response.raise_for_status()
+        log(f"[SUCCESS] Updated project {project_id} with {media_field} (Total: {len(media_ids)})")
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        log(f"[ERROR] Failed to update project {project_id}: {str(e)}")
+        if hasattr(e, 'response') and hasattr(e.response, 'text'):
+            log(f"[ERROR] Response: {e.response.text}")
+        raise
